@@ -1,0 +1,438 @@
+SESSION TRANSCRIPT — Systolic Array Controller Review
+Date: 2026-08-01
+Project: C:\Users\정세헌\Desktop\Systolic_array
+Files involved: Controller.sv, Top_Module.sv, SYSTOLIC_ARRAY.sv, SRAM.sv, MAC_Unit.sv, SKEW_Unit.sv, tb_Top_module.sv
+================================================================================
+
+--------------------------------------------------------------------------------
+[1] USER:
+I made controller FSM for my Systolic Array. Could you check whether this
+controller works fine?
+
+ASSISTANT:
+Reviewed Controller.sv (initial version). Found:
+
+Won't compile as-is:
+- `always_comb @(posedge clk)` (line 21) — invalid syntax; always_comb never
+  takes a sensitivity list.
+- `wgt_addr`/`act_addr` used but never declared (likely meant addr_wgt/addr_act).
+- `act_offset` used but never declared (only wgt_offset was).
+
+Critical logic bug:
+- current_state/next_state declared `logic [3:0]` (4 bits) but the state
+  parameters are 5-bit one-hot, including DONE = 5'b10000. The top bit gets
+  truncated, so DONE collapses to 4'b0000, matching no case label — FSM
+  stalls/latches every time it reaches DONE instead of returning to IDLE.
+  Fix: widen to logic [4:0].
+- No `default` in the next_state case compounds this via latch inference.
+
+Incomplete logic (even once compiling):
+- addr_wgt/addr_act (real output ports) only ever reset to 0, never actually
+  driven with base_addr + counter (bug was assigning to the undeclared
+  wgt_addr/act_addr instead).
+- wgt_counter/act_counter declared, reset, but never incremented.
+- ena_wgt, wea_wgt, ena_act, wea_act reset to 0 and never asserted again —
+  dead outputs.
+- Iteration count mismatch: wgt_offset counts down 3→2→1 and exits at 0
+  (skips that last cycle, effectively 3 iterations) while act_offset counts
+  up 0→1→2→3 and exits after reaching 3 (4 iterations).
+
+Recommended priority: fix the state-register width first (root cause of the
+hang), then the rest.
+
+--------------------------------------------------------------------------------
+[2] USER: (selected wea_act <= 0 line)
+I've fixed some. check it again
+
+ASSISTANT:
+Confirmed: state width fix ([5:0]) resolved the DONE-truncation hang.
+
+Still won't compile:
+- act_offset still never declared.
+- `always_comb @(*)` still invalid syntax (always_comb takes no sensitivity
+  list at all, not even @(*)).
+- `Default:` (capital D) — SystemVerilog is case-sensitive; this is an
+  undeclared identifier used as a case item, not the default branch.
+
+New bug introduced by this edit:
+- addr_wgt/addr_act now driven combinationally (in always_comb) AND from
+  the always_ff reset block — two procedural drivers on the same logic
+  signal, a multiple-driver conflict.
+- Related: addr_wgt/addr_act only assigned in LOAD_wgt/ACT branches of the
+  combinational block — other branches leave them unassigned → latch
+  inference.
+
+Leftover from before: wgt_counter/act_counter now unused entirely (address
+math switched to offsets) — safe to delete. ena_wgt/wea_wgt/ena_act/wea_act
+still dead. Iteration-count mismatch unchanged.
+
+--------------------------------------------------------------------------------
+[3] USER:
+check again please
+
+ASSISTANT:
+Confirmed: act_offset declared, always_comb syntax fixed, `default` now
+lowercase, addr_wgt/addr_act no longer written from two always blocks —
+should compile now.
+
+Two functional issues remained:
+1. Latch inference on addr_wgt/addr_act still present (only assigned in
+   LOAD_wgt/ACT branches; no default before the case).
+2. Structural asymmetry: LOAD_wgt self-loops, recomputing addr_wgt every
+   cycle as wgt_offset decrements (correctly walks multiple addresses).
+   ACT unconditionally leaves to WAIT after one cycle, computing addr_act
+   exactly once; WAIT increments act_offset but nothing recomputes addr_act
+   from it — so addr_act is frozen at one address for the whole activation
+   phase. Flagged as worth confirming intent (later determined this was
+   actually correct — see turn 5).
+
+Still open: ena_wgt/wea_wgt/ena_act/wea_act still dead; wgt_offset off-by-one
+(3,2,1 only, 0 unused) still present.
+
+--------------------------------------------------------------------------------
+[4] USER:
+check my Systolic_Array.sv, Top_module.sv, SRAM.sv, MAC_Unit.sv. Since my
+SRAM's output is 32bit and whole Systolic Array is 4*4 which every MAC Unit
+handles 8bits each, in Loading Weight Phase, I thought that I need to
+contact 4 address in wgt SRAM, but in ACT Phase I only need to access to 1
+Address in ACT SRAM.
+
+ASSISTANT:
+Full-system review (Controller + Systolic_Array + Top_Module + SRAM +
+MAC_Unit + SKEW_Unit).
+
+Confirmed the user's architecture understanding is correct: SRAM dout is
+32-bit = 4 lanes of int8; wgt_in[k] loads one row of the 4x4 weight matrix
+per read (needs 4 reads total, one per row, shifted down via w_out); act_in
+feeds one scalar per row via the diagonal skew (single 32-bit read is
+correct for a weight-stationary GEMV: one 4-element activation vector ×
+stationary 4x4 weights → one 4-element output vector).
+
+Root cause identified: SRAM.sv's dout is registered (1-cycle read latency:
+"ask this cycle, get it next cycle"), but Controller's enb_wgt/load_en/
+enb_act/start are all produced through a registered always_ff keyed off
+current_state, adding ANOTHER cycle of lag on top — nothing accounts for
+SRAM's extra cycle.
+
+Weight loading bug (traced cycle-by-cycle): addr_wgt changes every cycle
+(combinational) but enb_wgt turns on one cycle late, so the address for
+offset=3 is requested while enb_wgt is still 0 and is silently dropped;
+instead you get 2,1,0 plus a stale duplicate of 0. Net: array only shifts
+in 3 distinct weight rows instead of 4, deepest row ends up as 0.
+
+Activation bug (traced cycle-by-cycle): `start` (single-shot pulse driving
+SKEW_Unit's valid_in) fires exactly the cycle enb_act turns on — one cycle
+BEFORE dout_act actually reflects the read (SRAM's own 1-cycle latency).
+SKEW_Unit latches stale/leftover data and marks it valid; the real data
+arrives one cycle later with `start` already back to 0.
+
+Fix direction proposed: add one more cycle of buffer between "enable
+asserted" and "consumer treats data as valid," either via a delayed
+load_en/start, or (better, refined in turn 7) by making enb_wgt/enb_act
+combinational so they align with addr_wgt/addr_act in the same cycle,
+letting the existing 1-cycle lag on load_en/start naturally match SRAM's
+latency.
+
+Separate smaller bug: act_offset only reset to 0 inside the ACT branch
+itself, not reloaded in IDLE like wgt_offset — on a second `run` without an
+intervening reset, the first ACT cycle would use the stale leftover
+act_offset (=3) instead of 0.
+
+--------------------------------------------------------------------------------
+[5] USER:
+Can I just change some flipflop posedge -> negedge to solve this problem?
+
+ASSISTANT:
+No. Two reasons:
+1. Doesn't address the root cause — the missing piece is a pipeline stage
+   (SRAM's own registered read), not "wrong edge." Shifting some flops to
+   negedge only moves things by half a cycle, and in the activation case
+   you actually need `start` to happen LATER, not earlier — an edge swap
+   pushes the wrong direction (or at best half of what's needed).
+2. Mixed-edge synchronous design is fragile in real hardware (relies on
+   ~50% clock duty cycle for timing margins) and is hard to reason about /
+   often flagged by STA tools.
+
+Recommended clean fix instead: make enb_wgt/enb_act/addr outputs
+combinational (same cycle as the state), and let load_en/start's existing
+one-cycle registered lag be the thing that matches SRAM's one-cycle read
+latency — i.e., make the "enable" instant and use the natural lag on the
+"consume" signal instead of stacking two separate lags.
+
+--------------------------------------------------------------------------------
+[6] USER:
+I'm kinda confused... could you explain it easily? Step-by-Step?
+
+ASSISTANT:
+Gave a plain-language, cycle-by-cycle table walkthrough.
+
+Bug #1 (weight row loss) table, base_addr_wgt=100:
+  Cycle1: addr=103, enb=0 (not ready yet) -> request lost forever
+  Cycle2: addr=102, enb=1 -> captures mem[102]
+  Cycle3: addr=101, enb=1 -> captures mem[101]
+  Cycle4: addr=100, enb=1 -> captures mem[100]
+  Cycle5: DONE, addr stuck=100, enb still 1 -> captures mem[100] again (useless dup)
+  => row 103 never read; only 3 of 4 rows loaded.
+
+Bug #2 (stale activation) table:
+  Cycle A (ACT): enb_act=0, start=0
+  Cycle B (WAIT#1): enb_act=1 (just turned on), start=1 (pulses here) but
+    dout_act is STILL the old leftover value (SRAM hasn't finished the read)
+  Cycle C (WAIT#2): dout_act finally correct, but start already dropped to 0
+  => SKEW_Unit latches garbage, marks it valid; correct data arrives with
+     nobody listening.
+
+Explained why negedge doesn't fix this: both bugs are "something fires
+before the data it needs is ready" — needs a full extra cycle of delay,
+which a half-cycle edge shift can't reliably provide, and for bug #2 you
+need MORE delay, not less.
+
+Real fix in plain terms: delay the "go/consume" signal by one more tick
+using an explicit delayed copy of enb (e.g. enb_wgt_d <= enb_wgt;) to gate
+load_en/start; separately, fix bug #1 by making addr_wgt and enb_wgt turn on
+together (same cycle) instead of enb lagging addr.
+
+--------------------------------------------------------------------------------
+[7] USER:
+Considering your table for Bug#1, What I should do is to move enb_wgt and
+enb_act to always_comb block right?
+
+ASSISTANT:
+Yes — confirmed, and traced why this fixes BOTH bugs at once.
+
+Recommended:
+  assign enb_wgt = (current_state == LOAD_wgt);
+  assign enb_act = (current_state == ACT);
+Leave load_en/start exactly where they are (still registered, still one
+cycle behind state) — don't move those too.
+
+Re-traced Bug #1 with the fix: all 4 rows (103,102,101,100) now read
+correctly, none lost/duplicated. load_en (still lagging by construction)
+turns on exactly when the first valid data (103) appears on dout_wgt, and
+stays high exactly through the last (100) — lines up perfectly without
+touching load_en at all.
+
+Re-traced Bug #2 with the fix: enb_act now fires the same cycle as addr_act
+(during ACT), so the SRAM read is issued a cycle earlier than before;
+dout_act becomes valid at the first WAIT cycle — exactly when `start`
+(still on its original one-cycle lag) pulses. No more stale data.
+
+Explained why: the real problem was two delays stacked in the wrong place
+(enb was adding an extra lag on top of SRAM's own natural one). Making enb
+instant removes the extra delay, leaving just SRAM's one unavoidable cycle
+— exactly what load_en/start's pre-existing lag was already built to wait
+for.
+
+Noted: the act_offset-not-reloaded-in-IDLE issue is still separate and
+still open.
+
+--------------------------------------------------------------------------------
+[8] USER:
+I've changed some code in Controller, check please
+
+ASSISTANT:
+Good: act_offset reload added to IDLE (fixes the repeated-run bug from
+turn 4). But new compile-blocking issue introduced:
+
+enb_wgt/enb_act now have two drivers — continuous `assign` statements were
+added, but the old procedural writes to the same signals were left in the
+always_ff block (reset block: enb_wgt<=0, enb_act<=0; DONE case: enb_wgt<=0,
+enb_act<=0). A logic signal can't be driven by both `assign` and a
+procedural always_ff block. Told user to delete those 4 leftover lines
+(the `assign` already produces 0 automatically outside LOAD_wgt/ACT).
+
+Confirmed once fixed, the design would be in good shape: enb turns on same
+cycle as addr, load_en/start's existing lag lines up with SRAM's latency,
+and enb_act being scoped to just the ACT cycle also eliminates the
+previously-harmless-but-wasteful repeated reads during WAIT.
+
+Still open (untouched by this edit): addr_wgt/addr_act still latch-inferred
+(no default in always_comb); ena_wgt/wea_wgt/ena_act/wea_act still dead.
+
+--------------------------------------------------------------------------------
+[9] USER:
+DO I have to assign addr_wgt/addr_act? or Should i just change this to
+(assign addr_wgt = base_addr_wgt + wgt_offset)?
+
+ASSISTANT:
+Confirmed the `assign` approach is better than adding a default inside the
+case — simpler and fully eliminates the latch.
+
+  assign addr_wgt = base_addr_wgt + wgt_offset;
+  assign addr_act = base_addr_act + act_offset;
+
+Explained why it's safe even though it's now computed on every state: SRAM
+only ever samples addr at the exact same clock edge it checks enb, so
+whatever addr_wgt/addr_act equal during IDLE/WAIT/DONE is irrelevant —
+enb_wgt/enb_act are 0 then, so the SRAM never looks at addr in those
+cycles. Noted one visible side-effect: addr_act will now visibly change
+during WAIT (as act_offset increments) since it's no longer latched, but
+this is harmless for the same reason.
+
+Reminded to delete the old assignments inside always_comb (lines assigning
+addr_wgt in LOAD_wgt, addr_act in ACT) to avoid the same multi-driver error
+as before, now between assign and always_comb.
+
+--------------------------------------------------------------------------------
+[10] USER:
+I've fixed it, check the whole system
+
+ASSISTANT:
+Controller.sv confirmed clean: no compile issues, no latches, no stale
+drivers.
+
+Weight loading verified correct via full cycle-by-cycle trace through
+MAC_Unit's w_reg/w_out shift chain: final result is a clean 1:1 mapping —
+Row 0 = base_addr_wgt+0, Row 1 = +1, Row 2 = +2, Row 3 = +3. No drops, no
+duplicates.
+
+Activation loading verified correct: start now pulses exactly when dout_act
+becomes valid; SKEW_Unit's internal delay chain matches its valid_out
+timing.
+
+New finding (system-level): WAIT is too short for the array's actual
+compute latency. Derived the SKEW_Unit's per-row valid delay (row k arrives
+k+1 cycles after start) and the array's column-hop delay (1 cycle per
+column via out_valid propagation) to show the last column's result
+(data_out[3]) isn't valid until 8 cycles after `start`, but the Controller
+already returns to IDLE at cycle 5 relative to start. A 3-cycle gap: safe
+to sample data_out[0] right at IDLE, but [1]/[2]/[3] would still be
+mid-flight.
+
+Two options given: extend WAIT by ~3 cycles, or add a dedicated done/valid
+output derived from actual pipeline depth (tap the array's existing
+internal valid signals) instead of inferring completion from the FSM state.
+
+--------------------------------------------------------------------------------
+[11] USER:
+I was considering to put data continuously . (Not now but after checking
+thr whole system.) So, which way do you think better, extending wait
+stage or adding dedicated done/valid output?
+
+ASSISTANT:
+Recommended the dedicated valid signal, given the stated future goal of
+continuous/streaming operation.
+
+Reasoning: extending WAIT to cover the full 8-cycle latency would force the
+Controller to sit idle the whole drain time before considering a new run —
+defeating the systolic array's whole point (pipelined throughput). It's
+also a hardcoded magic number that breaks if the array is resized later.
+
+Pointed out the needed signal already exists, just unexposed: each
+MAC_Unit's out_valid faithfully tracks when its psum_out is fresh, and for
+row 3 it currently dead-ends into an unused sink (in_valid_array[3][4] in
+SYSTOLIC_ARRAY.sv). Recommended exposing this as a new
+`output logic [3:0] data_valid` (one bit per output column) on
+Systolic_Array, routed up through Top_Module.
+
+Noted WAIT would still need a small fixed margin (not full drain) just to
+protect against overwriting weights while old activations are still
+in-flight — a separate, much smaller concern from full-result completion.
+
+--------------------------------------------------------------------------------
+[12] USER:
+So, just make some list of thing to do
+
+ASSISTANT:
+Read tb_Top_module.sv for the first time in this session and found it
+instantiates a module `Top_module` (lowercase) with an entirely different
+port list (load_en/start/act_in/wgt_in/data_out) that doesn't match the
+current `Top_Module` (run/base_addr_wgt/base_addr_act/din_wgt/din_act) —
+won't even elaborate against the current design.
+
+Produced prioritized to-do list:
+Blocking (needed before simulation is even possible):
+ 1. Fix the testbench/DUT mismatch (module name case + port list).
+ 2. Give the SRAMs a way to actually be written — ena_wgt/wea_wgt/ena_act/
+    wea_act are still dead, so there's no way to load test data through the
+    exposed ports at all (needs either a Controller write phase or a
+    sim-only backdoor preload).
+ 3. Once 1&2 are settled, rewrite the testbench to drive the real
+    run/base_addr_wgt/base_addr_act/preload path and confirm the Controller
+    fixes actually work in simulation.
+Correctness (from this review):
+ 4. Add data_valid output (tap the existing unused in_valid_array[3][k+1]
+    signals) instead of relying on FSM reaching IDLE as "results ready."
+ 5. Shrink WAIT back to just the minimal weight-overwrite-protection margin
+    now that data_valid handles completion signaling.
+Optional:
+ 6. Consider parameterizing array-size-dependent magic numbers
+    (wgt_offset/act_offset widths, the hardcoded 4s) if the array size may
+    change later.
+
+--------------------------------------------------------------------------------
+[13] USER:
+I just want testbench to preload my SRAM. Could you make testbench for me?
+
+ASSISTANT:
+Building the testbench surfaced two more concrete bugs in Top_Module.sv,
+fixed both:
+ - load_wgt was declared as a Controller input but never exposed as a
+   Top_Module port nor connected in the Controller instantiation — no
+   legal way to trigger weight loading from outside. Added `load_wgt` to
+   Top_Module's port list and wired it to the Controller instance.
+ - data_out width mismatch: Top_Module declared it as flat `[31:0]` (32
+   bits) but connected it directly to Systolic_Array's `[3:0][31:0]` port
+   (128 bits) — silently truncating 3 of 4 output columns. Widened
+   Top_Module's data_out to `signed [3:0][31:0]` to match.
+
+Replaced tb_Top_module.sv (old one targeted the stale/mismatched
+interface) with a new version that, per trial:
+ - generates random W[4][4] and A[4],
+ - backdoor-writes them directly into DUT.SRAM_wgt.mem[]/DUT.SRAM_act.mem[]
+   (bypassing the still-unconnected write enables — noted as still an open
+   item),
+ - preloads weight row i at base_addr_wgt+i (matching the row-to-address
+   mapping traced in turn 10),
+ - pulses load_wgt then run through the real top-level ports with generous
+   wait margins (8 cycles after load_wgt, 15 after run — independent of the
+   Controller's own premature WAIT exit, so the test validates datapath
+   correctness regardless of the still-open data_valid gap),
+ - checks data_out[j] against the GEMV reference sum_i(A[i]*W[i][j]).
+
+--------------------------------------------------------------------------------
+[14] USER:
+Simulate it in icarus, and show through GTKWave
+
+ASSISTANT:
+Located Icarus Verilog + GTKWave installed at C:\iverilog (not on PATH).
+Compiled with iverilog -g2012 against all six source files — clean compile,
+exit code 0.
+Ran with vvp — result:
+
+  -- trial 0 -- through -- trial 4 --
+  All 20 checks ([ OK ] col=0..3 per trial) matched expected values exactly.
+  TEST PASSED
+
+Launched GTKWave on the generated tb_Top_module.vcd.
+
+Confirmed this validates the datapath fixes made across the session
+(Controller timing realignment, weight/activation addressing, row mapping)
+are correct end-to-end. Suggested waveform signals worth inspecting:
+ - tb_Top_Module.DUT.controller.current_state (FSM stepping through
+   IDLE->LOAD_wgt->DONE->IDLE->ACT->WAIT->DONE)
+ - tb_Top_Module.DUT.SA.a_array / w_array / psum_array (weight shift-in and
+   partial-sum propagation across the 4x4 grid)
+ - run/start/enb_act timing vs. when dout_act/data_out actually settle —
+   visually confirms the ~10-cycle real latency vs. the Controller's
+   ~7-cycle WAIT+DONE window, i.e. concrete evidence the data_valid
+   addition is still worth doing for the streaming goal.
+
+Reiterated remaining open items: SRAM write-enables still dead (this
+testbench only worked around it via backdoor preload); WAIT/data_valid
+timing gap still unresolved for future streaming/continuous operation.
+
+================================================================================
+END OF TRANSCRIPT
+
+OPEN ITEMS CARRIED FORWARD (not yet implemented in the repo):
+ - ena_wgt / wea_wgt / ena_act / wea_act are still never driven by
+   Controller — no real write path into the SRAMs exists yet.
+ - WAIT's duration (~7 cycles incl. DONE) is shorter than the array's
+   actual output latency (~10 cycles from `run`) — data_out[1..3] are not
+   guaranteed settled by the time the Controller returns to IDLE.
+ - Recommended next step (per turn 11/12): add a `data_valid[3:0]` output
+   to Systolic_Array by tapping the existing but unused
+   in_valid_array[3][k+1] signals, route it through Top_Module, and shrink
+   WAIT to just the minimal weight-overwrite-protection margin.
+================================================================================

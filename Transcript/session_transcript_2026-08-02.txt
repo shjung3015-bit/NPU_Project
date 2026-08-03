@@ -1,0 +1,274 @@
+Systolic_Array project - design review session transcript
+Date: 2026-08-02
+Tooling used for verification: Icarus Verilog (iverilog/vvp), found at C:\iverilog\bin
+
+================================================================================
+1. Top_Module.sv - new SRAM write ports (ena_act/wea_act/ena_wgt/wea_wgt, etc.)
+================================================================================
+Request: check the new ports added to Top_Module for writing into SRAM_act/SRAM_wgt.
+
+Found: line 14 redeclared ena_act, wea_act, ena_wgt, wea_wgt as internal `logic`,
+even though they were already module input ports (lines 2-3). Duplicate
+identifier in the same scope.
+
+Fix applied:
+  logic ena_wgt, wea_wgt, enb_wgt, ena_act, wea_act, enb_act;
+  -> logic enb_wgt, enb_act;
+
+Verified remaining connections against SRAM.sv (din/addr_wt widths) - all correct.
+
+================================================================================
+2. SYSTOLIC_ARRAY.sv - data_valid output added
+================================================================================
+Request: check new data_valid output added to Systolic_Array.
+
+Found: data_valid computed correctly but not exposed as a Top_Module output
+port (dangling internal signal). User decided to leave it internal-only for
+now (no fix applied at that point).
+
+================================================================================
+3. Capture_REG.sv - capture register added (later replaced by FIFO_All)
+================================================================================
+Request: check Capture_REG added to hold systolic array output for one row.
+
+Found: result/result_valid computed by Capture_REG but not wired to any
+Top_Module output port - Top_Module's data_out was still driven directly by
+the raw, staggered SA.data_out. User decided to leave as internal-only at
+that point (deferred).
+
+================================================================================
+4. Full-system testbench (tb_System.sv) + Capture_REG verification
+================================================================================
+Request: build a testbench for the whole system and verify Capture_REG works.
+
+Bug found (blocking, compile-time): SYSTOLIC_ARRAY.sv line 20
+  assign data_valid = in_valid_array[3];
+in_valid_array is a 2D unpacked array; this doesn't elaborate. Also wrong even
+in intent - a PE's out_valid feeds in_valid_array[i][j+1], so the valid flag
+for column k is in_valid_array[3][k+1], not in_valid_array[3][k].
+
+Fix applied:
+  assign data_valid = {in_valid_array[3][4], in_valid_array[3][3],
+                        in_valid_array[3][2], in_valid_array[3][1]};
+
+Created tb_System.sv:
+  - Writes weights/activations through the real top-level SRAM write ports
+    (ena_wgt/wea_wgt/addr_wgt_wt/din_wgt, etc.), not hierarchical mem[] pokes.
+  - Verifies the 4 output columns become valid strictly in order 0,1,2,3,
+    one cycle apart (the staggering Capture_REG exists to handle).
+  - Verifies DUT.result[j] matches expected dot product for all 4 columns.
+  - Verifies result_valid asserts only once all 4 columns are captured, and
+    clears synchronously on the next `start`.
+
+Testbench timing bug (in the test itself, not the design): the
+"result_valid clears on next start" check sampled one cycle too early -
+Controller's `start` takes 2 clock edges to register after `run` is sampled
+in IDLE (case(current_state) block reads pre-edge state). Fixed by adding
+one more @(negedge clk) before the check.
+
+Result: 5 randomized trials, TEST PASSED.
+
+================================================================================
+5. SRAM write-port verification (explicit readback)
+================================================================================
+Request: confirm SRAM is actually being loaded through the new write ports,
+not just hierarchically poked.
+
+Confirmed tb_System.sv already used the real ports. Added explicit readback
+checks in write_wgt_row/write_act_row: read DUT.SRAM_wgt.mem[...] /
+DUT.SRAM_act.mem[...] right after each port write and compare against the
+expected word. All writes verified correct across 5 trials.
+
+================================================================================
+6. FIFO.sv
+================================================================================
+Request: check newly added FIFO.sv (depth-8, single-lane).
+
+Bug found: the d_out/mem-write always_ff block used `else if` between the
+write branch and the read branch:
+  if (wea && !ff_full) mem_fifo[wr_ptr[2:0]] <= d_in;
+  else if (rea && !ff_empty) d_out <= mem_fifo[rd_ptr[2:0]];
+This makes write and read mutually exclusive within a cycle, but wr_ptr and
+rd_ptr (in separate always_ff blocks) advance independently of each other
+with no such exclusivity. On a cycle with simultaneous wea+rea, rd_ptr still
+advances but d_out is never loaded with the entry it just skipped past -
+that FIFO entry is silently dropped.
+
+Proven with a standalone probe (push A,B,C; read A; simultaneous push D +
+read; read again): got A, then a stale value instead of B, then C directly -
+B was lost.
+
+Fix applied: made the write-to-mem and read-to-d_out independent (two `if`
+statements instead of if/else-if), matching how the pointers already behave.
+Reran the probe: correctly got A, B, C in order.
+
+Rest of FIFO.sv (ff_empty/ff_full circular-pointer logic, pointer widths,
+overflow/underflow guards) verified correct.
+
+================================================================================
+7. FIFO_All.sv (4-lane wrapper around FIFO.sv)
+================================================================================
+Request: check FIFO_All.sv.
+
+Verified via two testbenches:
+  - Data path: pushed 3 batches of 4-lane staggered data (matching real SA
+    timing), including push/pop landing on the same cycle (the exact
+    scenario the FIFO.sv bug above would have broken). All correct, all
+    lanes synchronized, no data loss.
+  - inject/counter/inject_ena: 8 injects with no pops correctly saturates
+    counter at 8 and drops inject_ena to 0; a pop correctly brings it back
+    to 7 and reasserts inject_ena. The {inject,pop} case statement's default
+    branch correctly nets to "hold" for both idle and simultaneous
+    inject+pop.
+
+Note (not fixed, just flagged): ff_full from each lane FIFO is computed but
+never used/exposed in FIFO_All - no backpressure/error signal if a lane ever
+overflows. Fine as long as inject_ena is respected by the caller.
+
+================================================================================
+8. Top_Module.sv - FIFO_All instantiation
+================================================================================
+Request: check IO of the new FIFO_All instance in Top_Module.
+
+Bug found: missing semicolon after the FIFO_All instantiation (hard syntax
+error). Fixed.
+
+Port connections verified correct (widths, names) once fixed.
+
+Also discovered while trying to do a full-hierarchy compile: Capture_REG.sv
+is missing its closing `endmodule` (file now ends right after the always_ff
+block). Since Capture_REG is no longer instantiated anywhere (replaced by
+FIFO_All), this doesn't block builds that exclude it, but the file itself is
+left in a broken state. User confirmed they're not using Capture_REG anymore;
+left the file as-is per user's call (no deletion performed without
+confirmation).
+
+Flagged (not fixed): result, result_valid, and inject_ena were all still
+internal-only, not on Top_Module's port list.
+
+================================================================================
+9. Top_Module.sv - data_out/result swap + FIFO_All output_valid timing bug
+================================================================================
+Request: check IO after switching which signal (data_out vs result) is the
+module's external output port.
+
+Confirmed: `result` is now the real external output, sourced from FIFO_All -
+correctly fixes the earlier dangling-result issue. `data_out` became the
+internal wire feeding FIFO_All.d_in from SA's raw output.
+
+Bug found (significant, timing): FIFO_All's `output_valid` was purely
+combinational (`assign output_valid = all_ready && pop;`) and doubled as the
+`rea` signal driving all 4 lane FIFOs. Since each FIFO's d_out is a
+registered read (1-cycle latency), output_valid ends up announcing "data
+ready" exactly one cycle BEFORE d_out actually contains the freshly-popped
+value.
+
+Proven with a probe modeling a standard downstream consumer
+(`always_ff @(posedge clk) if (output_valid) latch <= d_out;`): the consumer
+latched a stale/reset value (0) instead of the freshly popped word.
+
+User initially asked to just wrap the existing assign in an always_ff; this
+was explained NOT to fully fix it, because output_valid also drives the
+FIFOs' rea - registering it in place would delay the actual reads by the
+same cycle, so the misalignment would persist, just shifted later. User
+agreed to the two-signal split instead.
+
+Fix applied to FIFO_All.sv:
+  - Added combinational `pop_fire = all_ready && pop`, now driving `rea`
+    into the 4 lane FIFOs (reads still happen exactly on the pop cycle,
+    unchanged timing).
+  - `output_valid` is now a registered, 1-cycle-delayed copy of `pop_fire`,
+    aligning with the cycle d_out actually holds the popped data.
+  - counter/inject_ena logic switched to key off `pop_fire` (undelayed)
+    instead of the old output_valid, so credit accounting still happens on
+    the correct cycle.
+
+Reran the downstream-consumer probe: correctly latched the popped value.
+Reran both FIFO_All regression tests (data path, counter) - both still pass.
+
+================================================================================
+10. Controller.sv - FSM rework to use FIFO_All (IDLE/LOAD_wgt/STREAM)
+================================================================================
+Request: check the FSM after it was changed to stream activations through
+FIFO_All instead of the old single-shot ACT/WAIT/DONE flow.
+
+Bug found (syntax): trailing comma in the parameter list -
+  parameter IDLE = 3'b001, LOAD_wgt = 3'b010, STREAM = 3'b100,;
+Confirmed via compile failure. Fixed (removed trailing comma).
+
+Bug found (width/correctness): act_offset was still declared `[1:0]` (max 3)
+but now compared against and incremented toward `num_act`, a runtime
+10-bit count. For any num_act > 3, act_offset wraps at 2 bits and never
+equals num_act - FSM gets stuck in STREAM forever, only ever re-reading 4
+activation addresses. Fixed by widening act_offset to [9:0].
+
+Verified via simulation (Controller -> SRAM -> SKEW_Unit chained directly,
+bypassing Top_Module):
+  - 6 distinct activation words (num_act=6, > the old 2-bit limit) arrive at
+    the SKEW_Unit output in the correct order, no loss/duplication.
+  - Same test repeated with a 4-cycle inject_ena stall injected mid-stream -
+    still correct, no loss/duplication, stream resumes cleanly.
+
+Note: an earlier probe that checked addr_act's value at the same cycle as
+each start pulse showed addr_act "one cycle ahead" of the data index at that
+moment - initially looked like a bug, but this is expected pipelining
+(addr_act is the next prefetch address, one cycle ahead of the data start is
+currently validating, same pattern as the original single-shot design). The
+direct Controller->SRAM->SKEW_Unit data test confirmed no actual bug.
+
+Flagged (not part of Controller.sv, cross-file gap at the time): Top_Module
+had not yet been updated to connect the new num_act/inject_ena Controller
+ports - would leave them floating if compiled as part of the full design.
+
+User then independently tightened enb_act to also gate on
+`inject_ena && (act_offset < num_act)` (previously enb_act was unconditional
+across the whole STREAM state) - avoids wasted/extra SRAM reads past num_act
+or during a stall. Re-verified the streaming datapath test still passes with
+this change.
+
+================================================================================
+11. Top_Module.sv - final IO check after num_act/inject_ena wiring
+================================================================================
+Request: check IO after Top_Module was updated to match the new Controller.
+
+Confirmed:
+  - Full hierarchy (Top_Module, Controller, SRAM, Systolic_Array, SKEW_Unit,
+    MAC_Unit, FIFO_All, FIFO) elaborates cleanly with iverilog - no floating
+    ports, no width mismatches.
+  - num_act and inject_ena are correctly connected between Top_Module and
+    Controller.
+  - inject_ena backpressure loop is closed end-to-end: driven by
+    FIFO_All.inject_ena, consumed by Controller.inject_ena.
+  - Re-ran the Controller streaming/stall test against the updated enb_act
+    gating - still passes (all 6 words in order, with and without a
+    mid-stream stall).
+
+Still open (flagged, not blocking): result_valid is still not exposed as a
+Top_Module output port - only `result` is. Will matter once something
+outside the module needs to know when `result` is fresh.
+
+================================================================================
+Files changed this session
+================================================================================
+  Top_Module.sv       - duplicate port-shadowing logic decl removed; missing
+                         semicolon on FIFO_All instantiation fixed; IO
+                         rewired for FIFO_All/num_act/inject_ena/result over
+                         several iterations (mostly by the user, verified by
+                         review here).
+  SYSTOLIC_ARRAY.sv    - fixed data_valid assignment (array indexing bug).
+  FIFO.sv              - fixed simultaneous read/write data-loss bug.
+  FIFO_All.sv          - fixed output_valid/d_out one-cycle timing
+                         misalignment (pop_fire split).
+  Controller.sv        - fixed trailing-comma syntax error and act_offset
+                         width bug; user separately tightened enb_act gating.
+  Capture_REG.sv       - left broken/unused per user's decision (no longer
+                         instantiated anywhere; file missing its closing
+                         endmodule).
+
+Testbenches created (in scratch, not the project directory):
+  tb_System.sv (project directory, kept) - full Top_Module regression via
+    SRAM write ports, staggered-arrival check, Capture_REG-era result check.
+  tb_FIFO.sv, tb_FIFO_All.sv, tb_FIFO_All_counter.sv,
+  tb_FIFO_All_valid_timing.sv, tb_valid_misalign.sv, tb_Controller.sv,
+  tb_Controller_Stream.sv - scratch-only probes used to find/confirm the
+    bugs above, not copied into the project directory.

@@ -1,0 +1,200 @@
+================================================================
+Claude Code Session Transcript
+Project: Systolic_array (SKEW_Unit.sv, MAC_Unit.sv, Top_Module.sv)
+Date: 2026-07-29
+================================================================
+
+--------------------------------------------------------------
+[1] USER:
+--------------------------------------------------------------
+Check validity of MAC_Unit.sv, Top_Module.sv, SKEWING_Unit.sv
+
+--------------------------------------------------------------
+[1] ASSISTANT:
+--------------------------------------------------------------
+I checked all three files. `SKEWING_Unit.sv` is internally consistent, but `MAC_Unit.sv` has a syntax error and `Top_Module.sv` has several connection errors that reference `SKEWING_Unit`/`MAC_Unit` incorrectly.
+
+Blocking errors (won't compile/elaborate):
+
+1. MAC_Unit.sv:15 - missing `;` after the module port list. It's `)` followed directly by the `logic signed [7:0] w_reg;` declaration; needs `);`.
+
+2. Top_Module.sv:22 - instantiates `SKEW_Unit`, but the only skewing module that exists is `SKEWING_Unit` (defined in SKEWING_Unit.sv). Undefined module reference.
+
+3. Top_Module.sv:29-30 - connects to ports `.act_out(...)` / `.wgt_out(...)`, but `SKEWING_Unit`'s actual output port names are `act_skew_in` / `wgt_skew_in`. No such ports exist under those names.
+
+4. Top_Module.sv:52 - `.in_valid(in_valid)` connects the whole 4-element unpacked array `in_valid[3:0]` to `MAC_Unit`'s scalar `in_valid` port for every one of the 16 PE instances. That's a dimension mismatch - needs to be indexed, e.g. `.in_valid(in_valid[i])`.
+
+Functional bug (once the above are fixed):
+
+5. `MAC_Unit`'s `out_valid` output (MAC_Unit.sv:14) is never wired to the next PE's `in_valid` in `Top_Module`. `a_in`/`psum_in` get delayed by one cycle per column via `a_out`/`psum_out` as they move right, but if `in_valid` is just broadcast per-row from the skew unit (`in_valid[i]`) without that same per-column delay, the valid flag will desync from the data by the time it reaches later columns. `out_valid` should cascade column-to-column the same way `a_out` does.
+
+Minor/style (not errors):
+
+6. Signedness mismatch: `SKEWING_Unit` declares `act_in`/`wgt_in`/`act_skew_in`/`wgt_skew_in` as plain `logic [7:0]`, while `Top_Module`'s corresponding signals are `signed`. Harmless for pass-through wiring (no arithmetic happens in the skew unit), but worth aligning since `MAC_Unit` does signed multiply/add on these values downstream.
+
+SKEWING_Unit.sv itself looks correct: the per-row bubble/delay chains produce the right incremental skew (row i delayed by i extra cycles relative to row 0) for act, wgt, and valid alike.
+
+--------------------------------------------------------------
+[2] USER:
+--------------------------------------------------------------
+I've fixed most of it. check it again
+
+--------------------------------------------------------------
+[2] ASSISTANT:
+--------------------------------------------------------------
+All previously flagged blocking issues are fixed, and the functional cascading bug is fixed too.
+
+Confirmed fixed:
+1. MAC_Unit.sv:15 - `);` now correctly terminates the port list.
+2. Top_Module.sv:23 - module was renamed to `SKEW_Unit` (matches the file/definition now), instantiation resolves correctly.
+3. Top_Module.sv:30-31 - `.act_skew_in(...)`/`.wgt_skew_in(...)` now match `SKEW_Unit`'s actual port names.
+4. Top_Module.sv:41,54 - the new `in_valid_array [4:0][4:0]` fixes the array-to-scalar mismatch, and nicely also fixes the cascading bug I flagged earlier: `.out_valid(in_valid_array[i][j+1])` now propagates valid rightward column-by-column exactly in step with `a_out`/`a_array[i][j+1]`, so valid no longer desyncs from data as it crosses the row. Row 0's initial valid still comes correctly pre-skewed per row from `SKEW_Unit`. This is a sound systolic timing scheme now.
+
+One harmless nitpick, not a bug:
+- Top_Module.sv:18 - `logic signed in_valid_array [4:0][4:0];` declares each element as 1-bit `signed`. `signed` has no effect on a 1-bit value, so it's a no-op - fine to leave or drop the keyword.
+
+Everything else (the row/column data flow, psum accumulating down columns while a streams across rows, MAC_Unit's load/compute gating) checks out logically. This should compile and behave correctly now.
+
+--------------------------------------------------------------
+[3] USER:
+--------------------------------------------------------------
+How do I make Testbench for this systolic array?
+
+--------------------------------------------------------------
+[3] ASSISTANT:
+--------------------------------------------------------------
+Before writing the testbench, I traced through the exact cycle timing of the weight-load path and found something that would make writing a correct self-checking testbench tricky - the current weight-loading path did not actually support loading 4 independent per-row weight vectors.
+
+The issue: `wgt_in` went through `SKEW_Unit` (same as `act_in`), which only diagonally staggers a value - it never "stops" a value at its intended row. Once a weight value entered at row 0, it kept shifting down (`w_out`->`w_array[i+1][j]`) every cycle its cascaded `in_valid` was high, with no per-row gating to say "capture here, don't pass further." So:
+- A single 1-cycle `start` pulse with one `wgt_in` vector ended up loaded into all 4 rows identically.
+- Streaming 4 different row-vectors back-to-back didn't give 4 distinct rows either - each row's register just kept getting overwritten as later frames passed through it, so every row ended up holding the last frame sent, not its own intended vector.
+
+I asked the user how to proceed (fix weight loading first / testbench current behavior only / explain a different intended protocol). The user chose: "Fix weight loading first."
+
+The fix, in three parts:
+
+1. SKEW_Unit.sv - dropped `wgt_in`/`wgt_skew_in` entirely; it only needs to skew activations and valid now.
+
+2. MAC_Unit.sv - weight capture/shift is now gated only by `load_en` (unconditional each cycle it's high), independent of `in_valid`:
+```
+if(load_en) begin
+    w_reg <= w_in;
+    w_out <= w_in;
+end
+else if (in_valid) begin
+    a_out <= a_in;
+    psum_out<=psum_in + a_in * w_reg;
+end
+out_valid<=in_valid;
+```
+
+3. Top_Module.sv - feed `wgt_in` straight into row 0 (bypassing the skew unit), and drop the now-unused `wgt_skew_in` wiring: `assign w_array[0][k] = wgt_in[k];`
+
+Verified the new timing precisely: with weight rows presented in reverse order (row 3 first, row 0 last) while `load_en=1` for exactly 4 cycles, the shift-register naturally lands `W[i]` in row `i`. For compute, a single activation pulse makes `data_out[j]` valid `j+4` clock edges after the edge that sampled it (column 3 is the slowest, arriving at edge+7).
+
+Wrote a new file `tb_Top_module.sv`:
+- Loads a random 4x4 weight matrix `W` by presenting its rows in reverse order (row 3, 2, 1, 0) over 4 cycles with `load_en=1` - lands `W[i]` in PE row `i`.
+- Streams one random activation vector `A` with a 1-cycle `start` pulse, waits out the worst-case 7-edge latency (column 3), then reads `data_out`.
+- Checks against a software golden model `expected[j] = sum_i A[i]*W[i][j]`, repeats for 5 random trials, reports PASS/FAIL per column.
+
+--------------------------------------------------------------
+[4] USER:
+--------------------------------------------------------------
+Could you explane what have you done to fix weight logic?
+
+--------------------------------------------------------------
+[4] ASSISTANT:
+--------------------------------------------------------------
+Here's the full breakdown of the weight-loading fix.
+
+The original bug:
+`wgt_in` was routed through `SKEW_Unit` - the same diagonal-skew network used for `act_in`. That network is a set of per-row shift-register chains (row i delayed by i extra cycles), with no way to stop a value at a target row. Once a weight value entered at row 0, it just kept sliding down through row 1, 2, 3, one cycle at a time, forever (as long as `in_valid`/`load_en` stayed asserted).
+
+Combined with the old MAC_Unit logic (capture gated by `in_valid`), every row's `w_reg` got overwritten every time a value passed through it. So if you streamed 4 different row-vectors meant for 4 different PE rows, each row would just keep capturing whatever was passing by, and by the time everything settled, every row ended up holding the last vector sent - not its own intended row. There was no way to load a real 4x4 matrix with distinct values per row; you could only broadcast one shared vector to all rows.
+
+Why skewing was never needed for weights in the first place:
+Diagonal skewing exists so that `act_in`, `psum`, and their `valid` flags stay aligned in time as they ripple across the 2D mesh during compute - row i needs to be i cycles ahead of row 0 so its data reaches column j at the same moment row 0's data does. Weight loading has no such alignment requirement: you're not computing anything yet, you just want each row's register to hold a fixed value before compute starts. That's a plain shift-register problem, not a skew problem.
+
+The fix:
+1. SKEW_Unit.sv - stripped out `wgt_in`/`wgt_skew_in` and the `wgt_bubble` registers entirely. It now only skews `act_in` and `valid_in`.
+2. MAC_Unit.sv - decoupled weight capture from `in_valid`: weight shifting now happens on every cycle `load_en` is high, unconditionally - a straightforward 4-deep shift register down each column, with no dependency on the activation-skew machinery at all.
+3. Top_Module.sv - `wgt_in` is wired straight to `w_array[0][k]` (bypassing `SKEW_Unit` completely); `SKEW` now only produces `act_skew_in` and `valid_out`.
+
+Why "reverse row order" loads it correctly:
+With a plain 4-deep shift register (no skew), after pushing 4 values v0, v1, v2, v3 (one per cycle, in that order), the register ends up holding row0=v3, row1=v2, row2=v1, row3=v0 - the last value pushed ends up at the top (row 0), and the first value pushed ends up furthest down (row 3). So to get row_i = W[i], you must push v_c = W[3-c] - i.e. present row 3 first, row 0 last. That's exactly what `load_weights()` in the testbench does.
+
+--------------------------------------------------------------
+[5] USER:
+--------------------------------------------------------------
+I've downloaded icarus Verilog. Can you simulate this Systolic array to check it?
+
+--------------------------------------------------------------
+[5] ASSISTANT:
+--------------------------------------------------------------
+Located Icarus Verilog at C:\iverilog\bin (not yet on PATH). Compiled and ran the testbench, which surfaced real issues beyond simulator quirks:
+
+Real RTL bugs found:
+1. MAC_Unit.sv - `a_out`, `w_out`, `psum_out` were declared `output signed [...]` without `logic`, making them implicit wires that `always_ff` can't drive (Icarus rejected this at elaboration: "not a valid l-value"). Fixed by adding `logic` to all three.
+
+Icarus Verilog tool limitations discovered (not design bugs):
+2. Whole-array assignment (`arr <= 0;`, `arr = '{0,0,0,0};`) isn't supported by this Icarus build - unrolled to per-element assignments in SKEW_Unit.sv and the testbench.
+3. The big one: built a minimal 2-module reproduction (a submodule with an `output logic dout[3:0]` unpacked array driven by always_ff, connected to a parent's array variable) and confirmed Icarus does NOT propagate unpacked-array OUTPUT ports across a module boundary at all - the submodule's internal register updated correctly every cycle, but the parent's connected variable stayed `x` forever. This was silently breaking the whole design in simulation even though the logic was correct. Fixed by converting `SKEW_Unit`'s `act_skew_in`/`valid_out` and `Top_Module`'s `data_out` to PACKED array types (e.g. `logic [3:0][7:0] act_skew_in`, `logic [3:0] valid_out`, `logic signed [3:0][31:0] data_out`), which Icarus treats like ordinary vectors.
+4. In the testbench's golden model, `$signed(a)*$signed(w)` inside a compound `+=` gave inconsistent results depending on evaluation context (self-determined width quirk when the same expression appeared in a $display argument vs. the accumulation) - replaced with explicit `int` intermediates (`a_val = int'(A[i]); w_val = int'(W[i][j]); sum = sum + a_val*w_val;`), which is the robust way to do golden-model arithmetic.
+5. Along the way, also found and fixed a testbench-only bug: `int row = 3 - c;` declared inside a for-loop body only got initialized once by Icarus ("Static variable initialization requires explicit lifetime in this context"), so every load cycle presented the same weight row. Fixed by indexing directly (`W[3-c][j]`) instead of using an intermediate variable.
+
+Final result: TEST PASSED - 20/20 checks (5 random trials x 4 columns), matching a golden model `output[j] = sum_i A[i]*W[i][j]`, including correct negative-value handling.
+
+Debug/scratch files (tb_debug.sv, tb_portcheck.sv, compiled .vvp binaries) were removed afterward, leaving only SKEW_Unit.sv, MAC_Unit.sv, Top_Module.sv, and tb_Top_module.sv.
+
+--------------------------------------------------------------
+[6] USER:
+--------------------------------------------------------------
+Can you show Simulation Result by GTKWave?
+
+--------------------------------------------------------------
+[6] ASSISTANT:
+--------------------------------------------------------------
+Found GTKWave bundled with the Icarus install at C:\iverilog\gtkwave\bin\gtkwave.exe. Added `$dumpfile("tb_Top_module.vcd"); $dumpvars(0, tb_Top_module);` to the testbench, re-ran it (still TEST PASSED, 20/20), which produced tb_Top_module.vcd. Created a GTKWave save-file layout (tb_Top_module.gtkw) grouping signals into Control (clk/rst_n/load_en/start), the in_valid_array diagonal-wavefront grid, Data (act_in/wgt_in), and Output/Golden (data_out vs expected). Launched GTKWave (detached process) loaded with both files.
+
+Notes given to the user on what to look for:
+- Control group: load_en high for the 4 weight-load cycles per trial, then start pulsing once per trial.
+- in_valid_array grid: the single "1" bit sweeping diagonally through the 4x4 grid after each start pulse, visually confirming the skew timing.
+- Data: act_in/wgt_in stimulus per cycle.
+- Output/Golden: data_out[0..3] alongside expected[0..3], confirming they match once each column's valid window closes.
+
+--------------------------------------------------------------
+[7] USER:
+--------------------------------------------------------------
+/insights
+(ran the built-in /insights command to generate a usage report analyzing this session)
+
+--------------------------------------------------------------
+[7] ASSISTANT:
+--------------------------------------------------------------
+Your shareable insights report is ready:
+file://C:\Users\정세헌\.claude\usage-data\report-2026-07-29-175836.html
+
+Want to dig into any section or try one of the suggestions?
+
+--------------------------------------------------------------
+[8] USER:
+--------------------------------------------------------------
+Can I export what I did with claude code in txt file?
+
+--------------------------------------------------------------
+[8] ASSISTANT:
+--------------------------------------------------------------
+(Initially attempted to locate and parse Claude Code's internal session transcript (a JSONL log under .claude\projects\...) to convert it into a .txt export. The user asked "What are you doing?", so this approach was stopped and explained. Instead, asked the user to choose between a readable summary or a full conversation transcript. The user chose "Full conversation transcript" - this file is the result.)
+
+================================================================
+End of transcript.
+================================================================
+
+Summary of deliverables from this session, all in Desktop\Systolic_array\:
+- SKEW_Unit.sv       - fixed (renamed from SKEWING_Unit, dropped wgt skewing, per-element reset)
+- MAC_Unit.sv         - fixed (missing semicolon, missing `logic` on outputs, load_en-gated weight shift)
+- Top_Module.sv       - fixed (port name/module name mismatches, in_valid_array cascading, packed data_out)
+- tb_Top_module.sv    - self-checking testbench, 20/20 passing under Icarus Verilog
+- tb_Top_module.vcd   - waveform dump from the passing run
+- tb_Top_module.gtkw  - GTKWave signal layout save file
+- Claude_Code_Session_Transcript.txt - this file
