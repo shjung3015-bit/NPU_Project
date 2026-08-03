@@ -1,0 +1,61 @@
+[*]
+[*] GTKWave Analyzer save file
+[dumpfile] "tb_Top_module.vcd"
+[timestart] 0
+[size] 1400 800
+[sst_width] 250
+[signals_width] 250
+[sidebar_width] 250
+*-14.000000 1000000 -1 0 0 0 1 -1 -1
+@28
+tb_Top_module.clk
+tb_Top_module.rst_n
+tb_Top_module.load_en
+tb_Top_module.start
+@24
+-Control
+@22
+tb_Top_module.DUT.in_valid[3:0]
+@1000
+-in_valid_array (row0..row3, col0..col3)
+@22
+tb_Top_module.DUT.in_valid_array[0][0]
+tb_Top_module.DUT.in_valid_array[0][1]
+tb_Top_module.DUT.in_valid_array[0][2]
+tb_Top_module.DUT.in_valid_array[0][3]
+tb_Top_module.DUT.in_valid_array[1][0]
+tb_Top_module.DUT.in_valid_array[1][1]
+tb_Top_module.DUT.in_valid_array[1][2]
+tb_Top_module.DUT.in_valid_array[1][3]
+tb_Top_module.DUT.in_valid_array[2][0]
+tb_Top_module.DUT.in_valid_array[2][1]
+tb_Top_module.DUT.in_valid_array[2][2]
+tb_Top_module.DUT.in_valid_array[2][3]
+tb_Top_module.DUT.in_valid_array[3][0]
+tb_Top_module.DUT.in_valid_array[3][1]
+tb_Top_module.DUT.in_valid_array[3][2]
+tb_Top_module.DUT.in_valid_array[3][3]
+@1000
+-Data
+@25
+tb_Top_module.act_in[0]
+tb_Top_module.act_in[1]
+tb_Top_module.act_in[2]
+tb_Top_module.act_in[3]
+tb_Top_module.wgt_in[0]
+tb_Top_module.wgt_in[1]
+tb_Top_module.wgt_in[2]
+tb_Top_module.wgt_in[3]
+@1000
+-Output / Golden
+@25
+tb_Top_module.data_out[0]
+tb_Top_module.data_out[1]
+tb_Top_module.data_out[2]
+tb_Top_module.data_out[3]
+tb_Top_module.expected[0]
+tb_Top_module.expected[1]
+tb_Top_module.expected[2]
+tb_Top_module.expected[3]
+[pattern_trace] 1
+[pattern_trace] 0
