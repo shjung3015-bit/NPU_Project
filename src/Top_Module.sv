@@ -7,7 +7,8 @@ module Top_Module(
     input logic pop_ena,
     input logic [9:0] num_act,
 
-    output logic signed [3:0][31:0] result
+    output logic signed [3:0][31:0] result,
+    output logic result_valid
 );
 
     logic [3:0] [7:0] dout_wgt;
@@ -17,7 +18,6 @@ module Top_Module(
     logic [9:0] addr_wgt_rd, addr_act_rd;
     logic load_en, start;
     logic [3:0] data_valid;
-    logic result_valid;
     logic signed [3:0][31:0] data_out;
     logic inject_ena;
 

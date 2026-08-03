@@ -66,6 +66,7 @@ module Controller(
         else begin
             case(current_state)
                 IDLE: begin
+                    load_en <= 0;
                     wgt_offset <= 2'b11;
                     act_offset <= 2'b00;
                 end
