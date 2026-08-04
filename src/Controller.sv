@@ -11,7 +11,7 @@ module Controller(
 
     parameter IDLE = 3'b001, LOAD_wgt = 3'b010, STREAM = 3'b100;
 
-    logic [3:0] current_state, next_state;
+    logic [2:0] current_state, next_state;
     logic [1:0] wgt_offset;
     logic [9:0] act_offset;
 

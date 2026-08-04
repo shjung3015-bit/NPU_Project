@@ -1,0 +1,121 @@
+Systolic_Array project - design review session transcript
+Date: 2026-08-04
+Tooling used for verification: Verilator 5.032 via WSL (iverilog/vvp not found on PATH in
+either PowerShell or WSL this session, so the `test` Makefile target (iverilog) could not
+be exercised - only `test_sva` (Verilator, --binary --assert --timing) and a manual
+Verilator invocation against tb_FIFO).
+
+================================================================================
+1. Run the whole system to check the newly added SVA files (sva/*.sv)
+================================================================================
+Request: run the full system and confirm the new SVA assertions (Controller_sva.sv,
+FIFO_sva.sv, FIFO_All_sva.sv, SRAM_sva.sv, bind.sv) work correctly.
+
+`make test_sva` failed to elaborate on the first attempt. Found and fixed 3 bugs in the
+new SVA files themselves:
+
+  - FIFO_All_sva.sv / SRAM_sva.sv: `pop_fire |-> ##1 output_valid;` and
+    `(enb) |-> ##1 !isunknown(dout);` used `|-> ##1 x`, which Verilator's assertion
+    engine rejects ("Unsupported: ## () cycle delay range expression"). User directed
+    the fix: rewrite both as the equivalent `|=> x` (overlapped implication with the
+    1-cycle delay built in). Applied to both files.
+
+  - Controller_sva.sv: missing semicolons after both property bodies
+    (`act_offset <= num_act` / `$onehot(current_state)`) and after both
+    `assert property(...) else $error(...)` statements. Caused a hard parse error
+    ("syntax error, unexpected property, expecting ';'"). Fixed by adding the missing
+    semicolons (four total).
+
+  - SRAM_sva.sv: `!isunknown(dout)` was missing the `$` prefix on the system function
+    (`$isunknown`), which Verilator reported as an undefined task/function. Fixed.
+
+After these fixes the build elaborated cleanly, but the full tb_Top_module regression
+came back TEST FAILED - all 4 result columns read back as 0 on every trial, across all
+5 trials (20 mismatches), yet none of the 4 new assertions fired.
+
+Root cause (real RTL bug, not part of the SVA work but surfaced by running it):
+Top_Module.sv's SRAM_wgt/SRAM_act instantiations were never updated to connect `rst_n`
+after SRAM.sv was given an `rst_n` port. Verilator ties the unconnected input to 0, so
+both SRAMs sat in permanent reset - `dout` stuck at 0, `mem` never written. This is
+exactly why every trial read back 0. Fixed by adding `.rst_n(rst_n)` to both SRAM
+instances in Top_Module.sv.
+
+Noted for the record: this bug was invisible to SRAM_dout_timing precisely because that
+property's `disable iff(!rst_n)` was permanently disabling the check - the same broken
+signal that caused the bug also masked it. Not a flaw in the assertion itself, just a
+reminder that a stuck reset silences reset-gated properties.
+
+After the Top_Module.sv fix: `make test_sva` -> TEST PASSED (all 20 checks across 5
+randomized trials), zero assertion failures across all 4 new properties.
+
+Also ran tb/tb_FIFO.sv (not wired into the Makefile) directly through Verilator with
+FIFO_sva.sv bound in, to specifically exercise fifo_no_write_when_full and
+fifo_no_read_when_empty (the testbench deliberately overdrives write-when-full and
+read-when-empty). Passed clean, no violations - confirms FIFO.sv's pointer-stall
+behavior is correct under both properties.
+
+================================================================================
+2. SKEW_Unit.sv - user's power-efficiency change (operand gating)
+================================================================================
+Request: check whether a user-made change to SKEW_Unit.sv (renamed act_skew_in ->
+act_skew_out, and changed every register update from an unconditional shift
+`reg <= source` to a held-mux `reg <= enable ? source : reg`, gated by the matching
+valid_in/valid_bubble signal) violates the module's logic, and whether it actually
+helps power.
+
+Rename check: act_skew_in -> act_skew_out required updating the named port connection
+in SYSTOLIC_ARRAY.sv's SKEW_Unit instantiation. Confirmed the user had already updated
+it consistently (`.act_skew_out(act_skew_in)`), no dangling reference.
+
+Correctness check (manual trace, not just simulation): walked both a single-pulse
+valid_in case and a back-to-back streaming case (2+ consecutive valid_in=1 cycles)
+through all 4 lanes by hand. Confirmed by induction that the invariant holds: each
+act_skew_out[k]/act_bubble[..] register's enable is always the *old* value of the exact
+same valid signal that, on that same edge, is used to compute the paired
+valid_bubble/valid_out one stage downstream - so data and valid always move in lockstep,
+with identical per-lane latency (1/2/3/4 cycles for lanes 0-3) to the original
+unconditional-shift version. When a slot isn't valid it just holds stale data, which
+nothing downstream ever reads, so this is functionally invisible.
+
+Verified against simulation: reran `make test_sva` with the SKEW_Unit.sv change in
+place (it's already part of the Makefile's SRCS) - TEST PASSED, bit-exact same result
+values across all 5 trials as before the change, no assertion failures.
+
+Power benefit check (why it helps, not just "does it"): looked at MAC_Unit.sv and found
+the actual mechanism. `psum_out <= psum_in + a_in * w_reg;` is only written
+`else if (in_valid)`, but the RHS multiply `a_in * w_reg` is a combinational expression
+evaluated every cycle regardless of in_valid - so the multiplier hardware's switching
+activity depends on a_in toggling, not on whether the register capture happens. Before
+this change, act_skew_out (feeding a_in) picked up fresh, effectively-random act_in data
+every single cycle, including all the "bubble" cycles between real activations, so the
+downstream multiplier array was constantly toggling on garbage even though the result
+was discarded. Holding act_skew_out/act_bubble stable during invalid cycles keeps a_in
+constant through those idle cycles, suppressing that glitching - standard "operand
+isolation" technique, correctly applied here since the mux and the valid pipeline share
+the same enable signal.
+
+Conclusion given to user: change is logically sound (no functional regression, verified
+both by hand-trace and full-system rerun) and is a real power optimization, not just a
+style change - it closes the one gap MAC_Unit's own `else if(in_valid)` gating didn't
+cover (its combinational multiplier inputs).
+
+================================================================================
+Files changed this session
+================================================================================
+  sva/FIFO_All_sva.sv   - `|-> ##1 output_valid` -> `|=> output_valid` (Verilator
+                           doesn't support `##1` inside `|->`).
+  sva/SRAM_sva.sv        - `|-> ##1 !isunknown(dout)` -> `|=> !$isunknown(dout)`
+                           (same `##1` issue, plus missing `$` on isunknown).
+  sva/Controller_sva.sv  - added 4 missing semicolons (parse error).
+  src/Top_Module.sv      - connected `.rst_n(rst_n)` to SRAM_wgt and SRAM_act
+                           instances (previously unconnected -> permanent reset ->
+                           all results read back as 0).
+  src/SKEW_Unit.sv       - user's own change (act_skew_in -> act_skew_out rename,
+                           gated/held register updates for power); reviewed and
+                           verified only, no additional fix needed.
+
+Verified but not modified:
+  src/SYSTOLIC_ARRAY.sv  - SKEW_Unit port-name rename correctly propagated.
+  src/MAC_Unit.sv        - confirmed it's the reason SKEW_Unit's gating saves power
+                           (combinational multiplier on a_in/w_reg, gated register
+                           write only).
