@@ -25,7 +25,7 @@ module Systolic_Array(
 	    .act_in(act_in),
 	    .valid_in(start),
 
-	    .act_skew_in(act_skew_in),
+	    .act_skew_out(act_skew_in),
 	    .valid_out(in_valid)
     );
 

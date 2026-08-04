@@ -45,6 +45,7 @@ module Top_Module(
 
     SRAM SRAM_wgt (
         .clk(clk),
+        .rst_n(rst_n),
         .ena(ena_wgt),
         .wea(wea_wgt),
         .enb(enb_wgt),
@@ -57,6 +58,7 @@ module Top_Module(
 
     SRAM SRAM_act (
         .clk(clk),
+        .rst_n(rst_n),
         .ena(ena_act),
         .wea(wea_act),
         .enb(enb_act),
