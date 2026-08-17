@@ -14,12 +14,18 @@ module Controller(
     logic [2:0] current_state, next_state;
     logic [1:0] wgt_offset;
     logic [9:0] act_offset;
+    logic run_prev, load_wgt_prev;
+    logic run_pulse, load_wgt_pulse;
+
 
 
     assign enb_wgt = (current_state == LOAD_wgt);
     assign enb_act = (current_state == STREAM) && inject_ena && (act_offset < num_act);
     assign addr_wgt = base_addr_wgt + wgt_offset;
     assign addr_act = base_addr_act + act_offset;
+
+    assign run_pulse = run & ~run_prev;
+    assign load_wgt_pulse = load_wgt & ~load_wgt_prev;
 
 
     always_ff@(posedge clk) begin
@@ -30,9 +36,9 @@ module Controller(
     always_comb begin
         case(current_state)
             IDLE: begin
-                if(load_wgt) next_state = LOAD_wgt;
+                if(load_wgt_pulse) next_state = LOAD_wgt;
                 
-                else if(run) next_state = STREAM;
+                else if(run_pulse) next_state = STREAM;
                 
                 else next_state = IDLE;
             end
@@ -60,10 +66,13 @@ module Controller(
 
             wgt_offset <= 3;
             act_offset <= 0;
-
+            run_prev <= 1'b0;
+            load_wgt_prev <= 1'b0;
         end
         
         else begin
+            run_prev <= run;
+            load_wgt_prev <=load_wgt;
             case(current_state)
                 IDLE: begin
                     load_en <= 0;
