@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl -d Ubuntu -- bash -lc \"which verilator; verilator --version\")",
+      "Bash(wsl -d Ubuntu -- bash -lc \"cd '/mnt/c/Users/정세헌/Desktop/Systolic_array' && verilator --binary --assert --timing -Wall -Wno-fatal --top-module tb_UART_Bridge --Mdir build/verilator_uart src/UART_Bridge.sv src/UART_RX.sv src/UART_TX.sv tb/tb_UART_Bridge.sv 2>&1 | tail -3 && cd build/verilator_uart && timeout 30 stdbuf -oL -eL ./Vtb_UART_Bridge > /mnt/c/Users/정세헌/Desktop/Systolic_array/build/uart_debug.log 2>&1; wc -l /mnt/c/Users/정세헌/Desktop/Systolic_array/build/uart_debug.log\")",
+      "Bash(wsl -d Ubuntu -- bash -lc \"cd '/mnt/c/Users/정세헌/Desktop/Systolic_array' && verilator --binary --assert --timing -Wall -Wno-fatal --top-module tb_UART_Bridge --Mdir build/verilator_uart src/UART_Bridge.sv src/UART_RX.sv src/UART_TX.sv tb/tb_UART_Bridge.sv 2>&1 | tail -3 && cd build/verilator_uart && timeout 30 stdbuf -oL -eL ./Vtb_UART_Bridge > /mnt/c/Users/정세헌/Desktop/Systolic_array/build/uart_debug2.log 2>&1; wc -l /mnt/c/Users/정세헌/Desktop/Systolic_array/build/uart_debug2.log\")",
+      "Bash(grep -n \"state -> 16\\\\|recv\\\\[0\\\\]\\\\|recv\\\\[1\\\\]=\" \"/mnt/c/Users/정세헌/Desktop/Systolic_array/build/uart_debug2.log\" | head -5)",
+      "Read(//mnt/c/Users/정세헌/Desktop/Systolic_array/build/**)"
+    ]
+  }
+}

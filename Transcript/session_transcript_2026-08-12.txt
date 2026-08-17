@@ -1,0 +1,262 @@
+Systolic_Array project - design review session transcript
+Date: 2026-08-12
+Tooling used for verification: Verilator 5.032 via WSL (Ubuntu). User asked explicitly not
+to touch the existing Makefile (still points at the pre-UART module set) and to use
+Verilator rather than iverilog, since SVA files exist in the project. Testbench was
+compiled/run with a direct `verilator --binary --assert --timing` invocation, not through
+`make`.
+
+================================================================================
+1. UART_RX.sv review (user-written, pre-existing)
+================================================================================
+User: "I made UART RX for my system." Reviewed the file cold. Found and fixed, over
+several iterations as the user applied each fix and asked for another pass:
+
+  - `rx_sampled` was used in the shift register but never declared anywhere - undefined
+    signal, would not compile. Root cause: no synchronizer existed for the asynchronous
+    `rx` input. Fixed by adding a proper 2-flop synchronizer (`rx_meta`/`rx_sync`,
+    reset to 1 since UART idle/stop level is high) and using `rx_sync` everywhere the
+    FSM previously read raw `rx`, including the shift register.
+  - `da_counter == 0;` inside the DATA state was a comparison, not an assignment (missing
+    `<=`) - a no-op that left da_counter free-running after the first data bit, so only
+    bit 0 of every received byte was ever sampled correctly. Fixed to `da_counter <= 0;`.
+  - Off-by-one: `da_counter == CLKS_PER_BIT` gave CLKS_PER_BIT+1 cycles per data bit,
+    inconsistent with str_counter's `CLKS_PER_BIT/2 - 1` and st_counter's
+    `CLKS_PER_BIT - 1` patterns elsewhere in the same file. Fixed to
+    `CLKS_PER_BIT - 1` for exact per-bit timing.
+
+Discussed the reasoning behind the double-flop synchronizer at some length (metastability,
+why a single flop isn't enough, why the added 2-cycle latency is negligible against a
+234-cycle bit period) since the user wanted the "why," not just the fix.
+
+Late in the session, a fresh regression showed up unprompted: `bit_counter` had been
+retyped as `bit_conuter` in the declaration only (all five usage sites still said
+`bit_counter`), blocking compilation of the later system-level testbench. Fixed by
+correcting the declaration back to `bit_counter`.
+
+================================================================================
+2. UART_TX.sv review (user-written, pre-existing)
+================================================================================
+Found one real bug: `next_state` for the DATA state checks `bit_counter == 8` against the
+*registered* value, so the FSM lingers one extra cycle in DATA after the 8th bit
+completes. In UART_RX this same one-cycle lag is harmless (deliberately used to latch
+rx_byte/rx_valid); in UART_TX nothing guarded it, so `tx <= shift_reg[0]` fired on that
+extra cycle too - and by then shift_reg has been right-shifted 8 times with 1'b0 fed into
+the MSB each time, so it reads all zeros. Net effect: a spurious 1-cycle low glitch on
+`tx` between the last data bit and the stop bit. Fixed by gating the DATA branch's body
+with `if (bit_counter != 8)` so `tx` just holds its last valid level during that extra
+cycle instead of glitching to 0.
+
+User asked how a receiver would ever distinguish real data from this padding cycle -
+clarified that UART_RX doesn't watch for edges/transitions on the wire at all; it
+independently times fixed offsets from the start-bit edge it detects and samples the
+line level at the middle of each window, so a receiver never even sees TX's internal
+state machine, only voltage levels at its own sampling instants. A stretched bit (or, pre-
+fix, the 1-cycle glitch) is invisible given ~117 cycles of margin either side of center.
+
+================================================================================
+3. UART_Bridge.sv - designed and built from an empty skeleton
+================================================================================
+Started from `module UART_Bridge();` with nothing in it. Worked through the design in
+stages before writing code:
+
+  - Register map: fixed byte addresses 0x00-0x09 covering every Top_Module control/data
+    port, widths padded to whole bytes (10-bit fields -> 2B, 32-bit fields -> 4B, packed
+    control bits -> 1B, result[3:0]+result_valid -> 17B read-only).
+  - Packet framing: `[CMD][ADDR][DATA...]` for writes, `[CMD][ADDR]` for reads with a
+    17-byte response. CMD kept as a separate field from ADDR (rather than folding
+    direction into the address's MSB) since the register map was explicitly meant to be a
+    "full" memory-mapped interface, not fixed-direction-per-address.
+  - Internal architecture: a 5-state one-hot FSM (WAIT_CMD / WAIT_ADDR / WAIT_DATA /
+    COMMIT / SEND) around an instantiated UART_RX + UART_TX pair, a per-transaction
+    `case(addr)` register file, and a byte-array TX payload (`tx_payload[0:16]`) fed
+    byte-by-byte into UART_TX via a trigger/busy handshake.
+
+The implementation went through roughly a dozen review-and-fix passes as the user applied
+each round of fixes and asked "check again." Bugs found and fixed along the way (folded
+directly into the file as they were caught, not left as a change-log):
+
+  - Module port list issues: `tx_data`/`trigger` initially declared as *inputs* instead of
+    bridge-internal signals (nothing outside the bridge should drive them); missing
+    `output logic tx`; missing `result`/`result_valid` input ports; a trailing comma;
+    `logic` missing on `din_wgt`/`din_act` (defaulted to `wire`, illegal target for the
+    non-blocking assignments used to drive them).
+  - Submodule instance names (`rx`, `tx`) collided with the bridge's own port names of the
+    same spelling - renamed to `U_rx`/`U_tx`.
+  - `current_state <= next_state` and the whole `if(!rst_n)` reset block were missing
+    entirely at one point - the FSM literally never advanced. Added both.
+  - `temp_buf` (RX-side byte accumulator) was written as a flat `temp_buf <= rx_byte`
+    instead of an indexed array, so multi-byte writes only ever kept the last byte.
+    Fixed to `temp_buf[byte_ide] <= rx_byte` with a running index.
+  - `byte_ide` was never reset between WRITE transactions. Confirmed by hand-trace that
+    two back-to-back short writes (e.g. two 2-byte writes) would silently commit stale
+    data from the *previous* transaction, since COMMIT always reads temp_buf from fixed
+    base-0 indices but byte_ide carried over its leftover value. Fixed by resetting
+    `byte_ide <= 0` in WAIT_ADDR alongside byte_remain. (Later confirmed fixed by the
+    testbench's dedicated regression case - see section 4.)
+  - Similarly, `tx_ide` was never reset between READ transactions - after a full 17-byte
+    send it ends up at 17 (one past the valid 0-16 range), and nothing reset it before the
+    next SEND, breaking every read after the first. Fixed by resetting `tx_ide <= 0` in
+    COMMIT when `cmd == READ`.
+  - The full 14-signal output register file (run/load_wgt/ena_act/.../din_wgt/num_act)
+    was never given reset values, only ever written inside COMMIT - so on power-up they
+    sat at X until the first matching WRITE arrived. Added explicit resets for all 14.
+  - Several `next_state` branches (inside WAIT_ADDR's cmd check, COMMIT's cmd check, and
+    SEND's completion check) had no final `else`, leaving next_state unassigned for
+    unmatched conditions and inferring unwanted latches. Added explicit else-fallbacks to
+    each.
+  - `tx_len` was declared but never driven (dangling signal) and was also too narrow (4
+    bits) to hold 17 - dropped entirely in favor of hardcoding the one-and-only read
+    length (17 bytes, `tx_ide < 16` / `tx_ide == 16`) directly in the SEND logic, since
+    there's currently only one readable address.
+  - `temp_buf <= 0;` in the reset block was a scalar assigned to an unpacked array -
+    fixed to `temp_buf <= '{default: 8'h00};`.
+
+Discussed and added a bridge-level `bridge_busy` output (`current_state != WAIT_CMD`)
+separately from UART_TX's own internal `busy`. Clarified for the user why the two aren't
+redundant: UART_TX.busy is a byte-level handshake signal scoped to "is this one byte still
+transmitting," entirely internal to the bridge's own SEND logic; bridge_busy is a
+transaction-level status signal for whatever sits above Top_Module, staying high for the
+whole multi-byte transaction rather than flickering per-byte.
+
+================================================================================
+4. Top-level restructuring: Top_Module -> System_Top wrapper + Systolic_Core
+================================================================================
+Discussed whether UART_Bridge should instantiate Top_Module (or vice versa) - recommended
+neither: keep the protocol layer (UART_Bridge) and the datapath layer (renamed to
+Systolic_Core) as siblings under a new top-level wrapper, so each stays independently
+testable and the host interface stays swappable. User carried out the rename
+(Top_Module.sv's old contents -> Systolic_Core.sv) and wrote a new Top_Module.sv that
+instantiates both UART_Bridge and Systolic_Core.
+
+Fixes applied to the new wrapper across a couple of passes:
+  - Missing comma in the port list (`input logic clk, rst_n` / `input logic rx,` needed a
+    comma between them).
+  - `.load_wgt(laod_wgt)` - typo connected Systolic_Core's load_wgt input to a
+    nonexistent signal instead of the wire actually driven by UART_Bridge.
+  - `output logic busy` was declared but never driven by anything - wired to the new
+    `bridge_busy` signal from UART_Bridge once that was added (see section 3).
+
+================================================================================
+5. Controller.sv - level-triggered run/load_wgt fixed to edge-triggered
+================================================================================
+While reviewing the FSM->Systolic_Array->FIFO_All handshake, found that Controller's
+IDLE state checks `run`/`load_wgt` as raw levels every cycle
+(`if(load_wgt) next_state = LOAD_wgt; else if(run) next_state = STREAM;`). This was a
+latent fragility even before UART_Bridge existed: any driver that holds the signal high
+one cycle too long after the FSM returns to IDLE would retrigger a second pass
+unintentionally. Since UART_Bridge's register-file model naturally holds a written value
+until the next write (rather than auto-pulsing), this needed fixing at the source rather
+than pushing pulse-generation logic into the bridge.
+
+Fix: added `run_prev`/`load_wgt_prev` registers and `run_pulse`/`load_wgt_pulse` (rising-
+edge detects), and switched the IDLE case to test the pulses instead of the raw levels.
+User applied this correctly; confirmed no `else` branches were left incomplete elsewhere
+in the same file.
+
+Also traced a second suspected issue (`start`'s glitchy/gapped assertion, since
+`inject_ena` can drop mid-stream due to FIFO_All backpressure) through SKEW_Unit.sv and
+MAC_Unit.sv - this turned out to be a non-issue, not a bug: both modules are explicitly
+designed as a valid-gated, bubble-tolerant pipeline (every register holds its value on an
+invalid cycle instead of advancing, and validity threads through the same delay chain as
+the data), so intermittent `start` just inserts harmless bubbles rather than corrupting
+data or misaligning the systolic array's accumulation.
+
+================================================================================
+6. tb/tb_UART_Bridge.sv - new testbench, built and iteratively debugged
+================================================================================
+User asked for a small testbench to actually exercise UART_Bridge rather than continuing
+to review by inspection. Verilator was confirmed available only inside WSL (not on
+Windows PATH in PowerShell or Git Bash), so all compiles/runs went through
+`wsl -d Ubuntu -- ...` against `/mnt/c/...` paths for the rest of the session.
+
+Testbench design: instantiates UART_Bridge directly (not the full Top_Module chain, to
+keep this focused on the protocol layer already under heavy review this session) with a
+bit-banged host-side UART model (`send_byte`/`send_write1/2/4`/`send_read`) and a
+response-side byte receiver. Six write transactions plus two back-to-back reads were
+chosen specifically to hit the trickiest bugs fixed earlier in the session:
+  - 1-byte writes to 0x00 and 0x01 (packed control bits).
+  - A 2-byte write to 0x06 (num_act) immediately followed by a 2-byte write to 0x02
+    (addr_act_wt) - the exact back-to-back-short-write sequence that would fail without
+    the byte_ide reset fix from section 3.
+  - A 4-byte write to 0x07 (din_act).
+  - Two consecutive reads of 0x09 with different result/result_valid values driven each
+    time - the exact sequence that would fail without the tx_ide reset fix from section 3.
+
+First compile failed on the `bit_conuter` typo regression noted in section 1 - fixed, then
+compiled clean (warnings only: missing timescale on the DUT files, width-truncation
+warnings on the 16-bit-concat-into-10-bit-register writes, incomplete-case lint on the
+one-hot FSMs - none functional, none addressed this session).
+
+First run hung indefinitely (verilator process pinned at ~100% CPU, no output). Added a
+5ms watchdog plus signal dumps and traced it to a genuine RTL bug, not a testbench issue:
+all 6 write tests passed cleanly, but the SEND response path stalled partway through the
+17-byte reply. Root cause: `UART_Bridge`'s `sent_started && !busy` completion check
+assumed UART_TX's `busy` rises 1 cycle after `trigger`, but UART_TX actually takes 2
+cycles (trigger -> START state takes 1 cycle, busy<=1 registers and becomes visible 1
+cycle after that). In the 1-cycle gap where sent_started had just gone high but busy
+hadn't risen yet, `!busy` read as true and UART_Bridge treated the byte as instantly
+complete, double-counting tx_ide roughly every other byte and returning to WAIT_CMD after
+only ~8 real bytes while UART_TX kept transmitting independently underneath. Fixed by
+adding a `tx_busy_seen` register that only allows the completion branch to fire after
+`busy` has actually been observed high at least once for the current byte - applied
+symmetrically to both the sequential tx_ide-increment logic and the next_state SEND
+completion check (which had the identical race).
+
+After that fix the hang was gone (all 17 bytes sent every time), but byte *content* came
+back garbled - repeating/sliding hex patterns rather than the expected values. Hand-
+decoded the DUT's actual tx waveform bit-by-bit from a debug trace and confirmed the DUT
+was transmitting the correct byte (0x01, matching {7'b0,result_valid}) - the bug was in
+the testbench's receiver. Root cause: `check_read`'s `@(negedge tx)` was armed *after*
+`send_read()` returned, but UART_RX latches a received byte (and the bridge can start
+responding) before that byte's own stop bit has even finished - so by the time the
+receiver started waiting, the true start-of-frame edge had already passed, and
+`@(negedge tx)` locked onto a mid-byte bit transition instead, offsetting every sample by
+one phase for the rest of the frame. Fixed by replacing the reactive receiver with a
+background listener process (`initial ... forever @(negedge tx) ...`) that runs
+continuously from t=0 into a SystemVerilog queue, decoupled entirely from when the host-
+side request finishes sending - the standard robust pattern for this class of race.
+
+Final run: all 6 write checks pass, both read-back checks pass byte-for-byte (17/17 each),
+"TEST PASSED". Temporary debug log files created during triage were deleted; the
+watchdog and $dumpvars call remain in the committed testbench for future runs.
+
+================================================================================
+Files changed this session
+================================================================================
+  src/UART_RX.sv        - added rx/rx_meta/rx_sync 2-flop synchronizer; fixed
+                           da_counter <= 0 (was a bare comparison, no-op); fixed
+                           da_counter's off-by-one (CLKS_PER_BIT -> CLKS_PER_BIT-1);
+                           fixed bit_conuter -> bit_counter typo regression.
+  src/UART_TX.sv         - gated the DATA state's tx/da_counter update with
+                           `bit_counter != 8` to remove a 1-cycle glitch before the stop
+                           bit.
+  src/UART_Bridge.sv     - built from an empty module to a complete 5-state
+                           WAIT_CMD/WAIT_ADDR/WAIT_DATA/COMMIT/SEND bridge; see section 3
+                           for the full list of bugs found and fixed across ~12 review
+                           passes, plus the SEND handshake race fixed via simulation in
+                           section 6.
+  src/Top_Module.sv      - rewritten as a thin wrapper instantiating UART_Bridge +
+                           Systolic_Core (previously held the datapath directly); fixed a
+                           missing port-list comma, a load_wgt/laod_wgt typo, and wired
+                           the new bridge_busy signal to the busy output.
+  src/Systolic_Core.sv   - new file; the old Top_Module.sv datapath content, renamed
+                           verbatim (Controller/SRAM/Systolic_Array/FIFO_All), no logic
+                           changes.
+  src/Controller.sv      - added run_pulse/load_wgt_pulse rising-edge detection so the
+                           IDLE state reacts to edges instead of levels, matching
+                           UART_Bridge's write-and-hold register semantics.
+  tb/tb_UART_Bridge.sv   - new file; testbench for UART_Bridge covering 1/2/4-byte
+                           writes, a targeted byte_ide-reset regression, and two
+                           back-to-back 17-byte reads covering the tx_ide-reset
+                           regression. TEST PASSED under Verilator.
+
+Verified but not modified:
+  src/SKEW_Unit.sv       - confirmed the valid-gated bubble pipeline correctly tolerates
+                           gaps in `start` caused by FIFO_All backpressure; not a bug.
+  src/MAC_Unit.sv        - confirmed out_valid/in_valid gating correctly propagates
+                           validity alongside data through the array.
+  Makefile               - left untouched at the user's explicit request; still points at
+                           the pre-UART module set (SRCS/TB) and would need updating
+                           separately to cover UART_RX/TX/Bridge and the new Top_Module
+                           split.
