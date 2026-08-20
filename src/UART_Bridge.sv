@@ -12,9 +12,14 @@ module UART_Bridge(
     output logic [31:0] din_wgt, din_act,
     output logic pop_ena,
     output logic [9:0] num_act,
-    output logic bridge_busy
+    output logic bridge_busy,
+    output logic [4:0] dbg_state
 
 );
+
+    // Active-low so the LED for the *current* state lights up (Tang Nano 9K
+    // LEDs are wired to the 1.8V bank and light when driven low).
+    assign dbg_state = ~current_state;
 
     parameter WAIT_CMD= 5'b00001, WAIT_ADDR = 5'b00010, WAIT_DATA = 5'b00100, COMMIT = 5'b01000, SEND = 5'b10000;
     parameter WRITE = 1'b0, READ = 1'b1;

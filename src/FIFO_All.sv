@@ -14,9 +14,20 @@ module FIFO_All(
     logic [3:0] ff_empty, ff_full;
     logic all_ready;
     logic pop_fire;
+    logic pop_prev, pop_edge;
+
+    // pop comes from the (slow, externally-controlled) host register
+    // interface and can stay asserted for a huge number of clocks --
+    // edge-detect it so one host-visible pop request drains exactly one
+    // entry instead of free-running every cycle all_ready stays true.
+    always_ff@(posedge clk) begin
+        if(!rst_n) pop_prev <= 1'b0;
+        else       pop_prev <= pop;
+    end
 
     assign all_ready = &(~ff_empty);
-    assign pop_fire = all_ready && pop;
+    assign pop_edge = pop && !pop_prev;
+    assign pop_fire = all_ready && pop_edge;
 
     // output_valid must line up with the cycle d_out actually holds the
     // popped data, which lags pop_fire by 1 cycle (each FIFO's d_out is
