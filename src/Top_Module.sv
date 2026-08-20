@@ -3,7 +3,8 @@ module Top_Module(
     input logic rx,
 
     output logic busy,
-    output logic tx
+    output logic tx,
+    output logic [4:0] dbg_state
 );
 
     
@@ -41,7 +42,8 @@ module Top_Module(
         .din_act(din_act),
         .pop_ena(pop_ena),
         .num_act(num_act),
-        .bridge_busy(busy)
+        .bridge_busy(busy),
+        .dbg_state(dbg_state)
     );
 
     Systolic_Core S_Core(
