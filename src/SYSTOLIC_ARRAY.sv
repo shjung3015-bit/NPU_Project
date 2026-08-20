@@ -1,61 +1,63 @@
 module Systolic_Array(
-    
-    input logic clk, rst_n, load_en, start,
 
-    input logic signed [3:0] [7:0] act_in ,
-    input logic signed [3:0] [7:0] wgt_in,
+    input logic clk, rst_n, LoadEna, start,
 
-    output logic signed [3:0][31:0] data_out,
-    output logic [3:0] data_valid
+    input logic signed [3:0] [7:0] In_act ,
+    input logic signed [3:0] [7:0] In_wgt,
+
+    output logic signed [3:0][31:0] DataOut,
+    output logic [3:0] DataValid
 );
 
-    logic [3:0][7:0] act_skew_in;
+    localparam ARRAY_SIZE = 4;
 
-    logic signed [7:0] a_array [4:0] [4:0];
-    logic signed [7:0] w_array [4:0] [4:0];
-    logic signed [31:0] psum_array [4:0] [4:0];
-    logic in_valid_array [4:0] [4:0];
-    logic [3:0] in_valid;
+    logic [3:0][7:0] SkewIn_act;
 
-	assign data_valid = {in_valid_array[3][4], in_valid_array[3][3], in_valid_array[3][2], in_valid_array[3][1]};
+    logic signed [7:0] AArray [ARRAY_SIZE:0] [ARRAY_SIZE:0];
+    logic signed [7:0] WArray [ARRAY_SIZE:0] [ARRAY_SIZE:0];
+    logic signed [31:0] PsumArray [ARRAY_SIZE:0] [ARRAY_SIZE:0];
+    logic InValidArray [ARRAY_SIZE:0] [ARRAY_SIZE:0];
+    logic [3:0] InValid;
+
+	assign DataValid = {InValidArray[3][4], InValidArray[3][3], InValidArray[3][2], InValidArray[3][1]};
 
     SKEW_Unit SKEW (
 	    .clk(clk),
 	    .rst_n(rst_n),
-	    .act_in(act_in),
-	    .valid_in(start),
+	    .In_act(In_act),
+	    .ValidIn(start),
 
-	    .act_skew_out(act_skew_in),
-	    .valid_out(in_valid)
+	    .SkewOut_act(SkewIn_act),
+	    .ValidOut(InValid)
     );
 
     genvar k;
     generate
-	    for (k = 0; k < 4; k++) begin : BOUND
-      		assign a_array[k][0]    = act_skew_in[k];
-      		assign w_array[0][k]    = wgt_in[k];
-      		assign psum_array[0][k] = 32'sd0;
-            assign in_valid_array[k][0] = in_valid[k];
-      		assign data_out[k]      = psum_array[4][k];
+	    for (k = 0; k < ARRAY_SIZE; k++) begin : BOUND
+      		assign AArray[k][0]    = SkewIn_act[k];
+      		assign WArray[0][k]    = In_wgt[k];
+      		assign PsumArray[0][k] = 32'sd0;
+            assign InValidArray[k][0] = InValid[k];
+      		assign DataOut[k]      = PsumArray[ARRAY_SIZE][k];
     	end
     endgenerate
 
     genvar i, j;
     generate
-	    for (i = 0; i < 4; i++) begin : ROW
-      		    for (j = 0; j < 4; j++) begin : COL
+	    for (i = 0; i < ARRAY_SIZE; i++) begin : ROW
+      		    for (j = 0; j < ARRAY_SIZE; j++) begin : COL
         		    MAC_Unit PE (
           			    .clk      (clk),
           			    .rst_n    (rst_n),
-          			    .load_en  (load_en),
-          			    .in_valid (in_valid_array[i][j]),
-          			    .a_in     (a_array[i][j]),
-          			    .w_in     (w_array[i][j]),
-          			    .psum_in  (psum_array[i][j]),
-          			    .a_out    (a_array[i][j+1]),
-          			    .w_out    (w_array[i+1][j]),
-          			    .psum_out (psum_array[i+1][j]),
-                        .out_valid(in_valid_array[i][j+1])
+          			    .LoadEna  (LoadEna),
+          			    .InValid (InValidArray[i][j]),
+          			    .AIn     (AArray[i][j]),
+          			    .WIn     (WArray[i][j]),
+          			    .PsumIn  (PsumArray[i][j]),
+          			    .AOut    (AArray[i][j+1]),
+          			    .WOut    (WArray[i+1][j]),
+          			    .PsumOut (PsumArray[i+1][j]),
+                        .OutValid(InValidArray[i][j+1])
        	 		    );
       		    end
     	    end

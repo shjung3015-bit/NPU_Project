@@ -8,7 +8,7 @@ TB_DIR = tb
 BUILD_DIR = build
 SVA_DIR = sva
 
-SRCS = $(SRC_DIR)/Top_Module.sv $(SRC_DIR)/Controller.sv $(SRC_DIR)/FIFO_All.sv $(SRC_DIR)/FIFO.sv $(SRC_DIR)/MAC_Unit.sv $(SRC_DIR)/SKEW_Unit.sv $(SRC_DIR)/SRAM.sv $(SRC_DIR)/SYSTOLIC_ARRAY.sv
+SRCS = $(SRC_DIR)/Top_Module.sv $(SRC_DIR)/Controller.sv $(SRC_DIR)/FIFO_All.sv $(SRC_DIR)/FIFO.sv $(SRC_DIR)/MAC_Unit.sv $(SRC_DIR)/SKEW_Unit.sv $(SRC_DIR)/SRAM.sv $(SRC_DIR)/Systolic_Array.sv $(SRC_DIR)/Systolic_Core.sv $(SRC_DIR)/UART_Bridge.sv $(SRC_DIR)/UART_RX.sv $(SRC_DIR)/UART_TX.sv
 
 TB = $(TB_DIR)/tb_Top_module.sv
 

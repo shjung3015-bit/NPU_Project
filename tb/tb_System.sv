@@ -60,7 +60,7 @@ module tb_System;
 
     // ---- background tx listener (see tb_UART_Bridge.sv for why this has
     // to be a free-running background process rather than a reactive wait) --
-    logic [7:0] rx_queue [$];
+    logic [7:0] RxQueue [$];
 
     initial begin : tx_listener
         logic [7:0] b;
@@ -71,13 +71,13 @@ module tb_System;
                 b[i] = tx;
                 #(BIT_PERIOD);
             end
-            rx_queue.push_back(b);
+            RxQueue.push_back(b);
         end
     end
 
     task automatic recv_byte(output logic [7:0] b);
-        wait (rx_queue.size() > 0);
-        b = rx_queue.pop_front();
+        wait (RxQueue.size() > 0);
+        b = RxQueue.pop_front();
     endtask
 
     initial begin

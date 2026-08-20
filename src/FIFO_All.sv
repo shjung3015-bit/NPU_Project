@@ -1,66 +1,69 @@
 module FIFO_All(
     input logic clk, rst_n,
-    input logic [3:0] [31:0] d_in,
+    input logic [3:0] [31:0] DIn,
     input logic pop,
-    input logic [3:0] data_valid,
+    input logic [3:0] DataValid,
 
     input logic inject,
-    output logic inject_ena,
+    output logic InjectEna,
 
-    output logic [3:0] [31:0] d_out,
-    output logic output_valid
+    output logic [3:0] [31:0] DOut,
+    output logic OutputValid
 );
 
-    logic [3:0] ff_empty, ff_full;
-    logic all_ready;
-    logic pop_fire;
-    logic pop_prev, pop_edge;
+    localparam NUM_LANES  = 4;
+    localparam FIFO_DEPTH = 8;
+
+    logic [3:0] FfEmpty, FfFull;
+    logic AllReady;
+    logic PopFire;
+    logic PopPrev, PopEdge;
 
     // pop comes from the (slow, externally-controlled) host register
     // interface and can stay asserted for a huge number of clocks --
     // edge-detect it so one host-visible pop request drains exactly one
-    // entry instead of free-running every cycle all_ready stays true.
+    // entry instead of free-running every cycle AllReady stays true.
     always_ff@(posedge clk) begin
-        if(!rst_n) pop_prev <= 1'b0;
-        else       pop_prev <= pop;
+        if(!rst_n) PopPrev <= 1'b0;
+        else       PopPrev <= pop;
     end
 
-    assign all_ready = &(~ff_empty);
-    assign pop_edge = pop && !pop_prev;
-    assign pop_fire = all_ready && pop_edge;
+    assign AllReady = &(~FfEmpty);
+    assign PopEdge = pop && !PopPrev;
+    assign PopFire = AllReady && PopEdge;
 
-    // output_valid must line up with the cycle d_out actually holds the
-    // popped data, which lags pop_fire by 1 cycle (each FIFO's d_out is
-    // registered), so it's a delayed copy of pop_fire rather than the
+    // OutputValid must line up with the cycle DOut actually holds the
+    // popped data, which lags PopFire by 1 cycle (each FIFO's DOut is
+    // registered), so it's a delayed copy of PopFire rather than the
     // same combinational signal used to drive rea below.
     always_ff@(posedge clk) begin
-        if(!rst_n) output_valid <= 1'b0;
-        else       output_valid <= pop_fire;
+        if(!rst_n) OutputValid <= 1'b0;
+        else       OutputValid <= PopFire;
     end
 
     genvar i;
 
-    for(i=0; i<4; i++) begin
+    for(i=0; i<NUM_LANES; i++) begin
         FIFO fifo(
             .clk(clk),
             .rst_n(rst_n),
-            .wea(data_valid[i]),
-            .rea(pop_fire),
-            .d_in(d_in[i]),
+            .wea(DataValid[i]),
+            .rea(PopFire),
+            .DIn(DIn[i]),
 
-            .ff_empty(ff_empty[i]),
-            .ff_full(ff_full[i]),
-            .d_out(d_out[i])
+            .FfEmpty(FfEmpty[i]),
+            .FfFull(FfFull[i]),
+            .DOut(DOut[i])
         );
     end
 
-    logic [$clog2(8):0] counter;
+    logic [$clog2(FIFO_DEPTH):0] counter;
 
     always_ff@(posedge clk) begin
         if(!rst_n) begin
             counter <= 0;
         end
-        else case({inject, pop_fire})
+        else case({inject, PopFire})
             2'b10: begin
                 counter <= counter + 1;
             end
@@ -73,7 +76,7 @@ module FIFO_All(
         endcase
     end
 
-    assign inject_ena = counter < 8;
+    assign InjectEna = counter < FIFO_DEPTH;
 
 
 endmodule

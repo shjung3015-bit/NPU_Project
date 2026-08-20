@@ -1,99 +1,102 @@
 module Controller(
-    input logic clk, rst_n, run, load_wgt,
-    input logic [9:0] base_addr_wgt, base_addr_act,
-    input logic [9:0] num_act,
-    input logic inject_ena,
+    input logic clk, rst_n, run, Load_wgt,
+    input logic [9:0] BaseAddr_wgt, BaseAddr_act,
+    input logic [9:0] Num_act,
+    input logic InjectEna,
 
-    output logic enb_wgt, enb_act,
-    output logic [9:0] addr_wgt, addr_act,
-    output logic load_en, start
+    output logic Enb_wgt, Enb_act,
+    output logic [9:0] Addr_wgt, Addr_act,
+    output logic LoadEna, start
 );
 
-    parameter IDLE = 3'b001, LOAD_wgt = 3'b010, STREAM = 3'b100;
+    localparam ARRAY_SIZE = 4;
+    localparam ADDR_W = 10;
 
-    logic [2:0] current_state, next_state;
-    logic [1:0] wgt_offset;
-    logic [9:0] act_offset;
-    logic run_prev, load_wgt_prev;
-    logic run_pulse, load_wgt_pulse;
+    parameter IDLE = 3'b001, LOAD_WGT = 3'b010, STREAM = 3'b100;
+
+    logic [2:0] CurrentState, NextState;
+    logic [$clog2(ARRAY_SIZE)-1:0] Offset_wgt;
+    logic [ADDR_W-1:0] Offset_act;
+    logic RunPrev, LoadPrev_wgt;
+    logic RunPulse, LoadPulse_wgt;
 
 
 
-    assign enb_wgt = (current_state == LOAD_wgt);
-    assign enb_act = (current_state == STREAM) && inject_ena && (act_offset < num_act);
-    assign addr_wgt = base_addr_wgt + wgt_offset;
-    assign addr_act = base_addr_act + act_offset;
+    assign Enb_wgt = (CurrentState == LOAD_WGT);
+    assign Enb_act = (CurrentState == STREAM) && InjectEna && (Offset_act < Num_act);
+    assign Addr_wgt = BaseAddr_wgt + Offset_wgt;
+    assign Addr_act = BaseAddr_act + Offset_act;
 
-    assign run_pulse = run & ~run_prev;
-    assign load_wgt_pulse = load_wgt & ~load_wgt_prev;
+    assign RunPulse = run & ~RunPrev;
+    assign LoadPulse_wgt = Load_wgt & ~LoadPrev_wgt;
 
 
     always_ff@(posedge clk) begin
-        if(!rst_n) current_state <= IDLE;
-        else current_state <= next_state;
+        if(!rst_n) CurrentState <= IDLE;
+        else CurrentState <= NextState;
     end
 
     always_comb begin
-        case(current_state)
+        case(CurrentState)
             IDLE: begin
-                if(load_wgt_pulse) next_state = LOAD_wgt;
-                
-                else if(run_pulse) next_state = STREAM;
-                
-                else next_state = IDLE;
+                if(LoadPulse_wgt) NextState = LOAD_WGT;
+
+                else if(RunPulse) NextState = STREAM;
+
+                else NextState = IDLE;
             end
-            LOAD_wgt: begin
-                if(wgt_offset == 2'b00) next_state = IDLE;
-                else next_state = LOAD_wgt;
-            end
-            
-            STREAM: begin
-                if(act_offset == num_act) next_state = IDLE;
-                else next_state = STREAM;
+            LOAD_WGT: begin
+                if(Offset_wgt == 2'b00) NextState = IDLE;
+                else NextState = LOAD_WGT;
             end
 
-            default: next_state = IDLE;
+            STREAM: begin
+                if(Offset_act == Num_act) NextState = IDLE;
+                else NextState = STREAM;
+            end
+
+            default: NextState = IDLE;
 
         endcase
-            
+
     end
 
 
     always_ff@(posedge clk) begin
         if(!rst_n) begin
-            load_en <= 0;
+            LoadEna <= 0;
             start <= 0;
 
-            wgt_offset <= 3;
-            act_offset <= 0;
-            run_prev <= 1'b0;
-            load_wgt_prev <= 1'b0;
+            Offset_wgt <= ARRAY_SIZE-1;
+            Offset_act <= 0;
+            RunPrev <= 1'b0;
+            LoadPrev_wgt <= 1'b0;
         end
-        
+
         else begin
-            run_prev <= run;
-            load_wgt_prev <=load_wgt;
-            case(current_state)
+            RunPrev <= run;
+            LoadPrev_wgt <=Load_wgt;
+            case(CurrentState)
                 IDLE: begin
-                    load_en <= 0;
-                    wgt_offset <= 2'b11;
-                    act_offset <= 2'b00;
+                    LoadEna <= 0;
+                    Offset_wgt <= ARRAY_SIZE-1;
+                    Offset_act <= 2'b00;
                 end
-           
-                LOAD_wgt: begin
-                    load_en <= 1;
-                    wgt_offset <= wgt_offset - 1;
+
+                LOAD_WGT: begin
+                    LoadEna <= 1;
+                    Offset_wgt <= Offset_wgt - 1;
                 end
                 STREAM: begin
-                    if(inject_ena && act_offset < num_act) begin
+                    if(InjectEna && Offset_act < Num_act) begin
                         start <= 1;
-                        act_offset <= act_offset + 1;
+                        Offset_act <= Offset_act + 1;
                     end
                     else begin
                         start <= 0;
                     end
                 end
-            endcase 
+            endcase
         end
     end
 

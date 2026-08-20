@@ -13,7 +13,7 @@ module SRAM_sva(
 
     property SRAM_same_addr_collision;
         @(posedge clk) disable iff(!rst_n)
-        !(ena && wea && enb && (addr_wt == addr_rd));
+        !(ena && wea && enb && (AddrWt == AddrRd));
     endproperty
     assert property(SRAM_same_addr_collision)
     else $error("[SRAM] Write/Read same address collision");
