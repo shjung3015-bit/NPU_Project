@@ -1,0 +1,200 @@
+Systolic_Array project - session transcript
+Date: 2026-08-20
+Tooling used for verification: no iverilog/vvp on this machine; used WSL
+Ubuntu's `verilator` (--binary --assert --timing) for all builds/runs, plus
+plain `python` (numpy) for the Stage-1 host-side check.
+
+================================================================================
+1. Whole-codebase refactor: parameterize + rename per two explicit rules
+================================================================================
+Request: refactor the entire RTL (src/, sva/, tb/) to (a) turn frequently-
+reused hard-coded numbers into named ALL_CAPS_SNAKE_CASE parameters/
+localparams, and (b) rename every variable (not parameters) to a Pascal+Snake
+hybrid - multi-word concepts merged into PascalCase, with an underscore used
+only to trail a domain qualifier (act/wgt), e.g. BaseAddr_act, BaseAddr_wgt.
+Explicit constraint: no logic changes; every existing testbench must still
+pass, and any file that regresses must be reverted and reported.
+
+Ambiguity resolved up front: asked whether a domain token (act/wgt) sitting
+in the middle of an existing name (e.g. addr_act_wt, addr_wgt_rd) should be
+reordered to trail (matching the BaseAddr_act example) or left in place and
+just Pascal-merged. User chose "reorder to trail". Locked in a single
+mechanical algorithm from that answer and applied it identically everywhere:
+split on existing underscores -> pull out an `act`/`wgt` token anywhere in
+the list as the domain -> PascalCase-join whatever's left as the core
+-> re-append `_act`/`_wgt` if a domain was captured. Single-token names
+(clk, busy, wea, addr, ena, ...) are left alone.
+
+Established a true pre-refactor baseline before touching anything, and it
+turned up baseline had stale build artifacts making earlier ad-hoc checks
+lie about pass/fail (see section 1a). After clearing those, three
+pre-existing, unrelated issues were found and NOT fixed (per the no-logic-
+change constraint), only worked around for verification purposes:
+  - Makefile's test_sva target referenced src/SYSTOLIC_ARRAY.sv (wrong case)
+    and was also missing 4 needed source files (Systolic_Core.sv,
+    UART_Bridge.sv, UART_RX.sv, UART_TX.sv). This is a build-script bug, not
+    RTL, so it WAS fixed (both the casing and the missing files).
+  - sva/Controller_sva.sv's STREAM_LOAD_STATE_VIOLATION property and
+    sva/SRAM_sva.sv's SRAM_same_addr_collision property both use invalid/
+    undeclared-signal syntax and have never actually compiled under
+    Verilator. Left broken as-is (renamed the identifiers inside them for
+    consistency, but did not fix the underlying syntax).
+  - tb_Top_module.sv's own watchdog (10ms) is too short for its 5 trials -
+    it always times out mid-trial-3 regardless of anything else (each trial
+    needs ~2.3ms of simulated UART time). Pre-existing, left as-is.
+
+Renamed every port/signal across all 11 src/ files, all 6 sva/ files, and
+all 4 tb/ files, including every cross-module port list, every
+sva/bind.sv connection, and the hierarchical DUT.current_state / DUT.tx_ide
+references inside tb_UART_Bridge.sv's watchdog block. Added parameters:
+SRAM.sv (ADDR_W, DATA_W, DEPTH), FIFO.sv (FIFO_DEPTH, DATA_W, PTR_W),
+FIFO_All.sv (NUM_LANES, FIFO_DEPTH), Systolic_Array.sv (ARRAY_SIZE),
+SKEW_Unit.sv (ARRAY_SIZE, port widths only), Controller.sv (ARRAY_SIZE,
+ADDR_W), MAC_Unit.sv (ACT_W, PSUM_W), UART_Bridge.sv (full REG_* register
+map, NUM_LANES, RESULT_BYTES, MAX_WRITE_BYTES). Left structural/hand-
+unrolled literals alone (e.g. SKEW_Unit's triangular bubble-buffer indices)
+since parameterizing those adds risk without adding reuse.
+
+Deliberately did NOT touch: Top_Module's 6 board-facing ports (clk, rst_n,
+rx, tx, busy, dbg_state) - pinned by exact string in
+fpga_bringup/tanknano9k.cst, and already atomic tokens anyway; module/
+instance names (U_Bridge, SRAM_wgt, PE, ...); src/No_Use/Capture_REG.sv
+(dead code, not in any build target).
+
+--------------------------------------------------------------------------
+1a. Stale build-artifact trap (worth recording)
+--------------------------------------------------------------------------
+The build/ directory already contained binaries from earlier sessions
+(build/verilator_system, build/verilator_obj, build/verilator_uart dated
+Aug 4 / Aug 17). The first baseline attempt piped a failing verilator build
+through `&&`, but since verilator's own exit code wasn't being checked
+correctly by the shell chain used, a stale pre-existing binary got executed
+and reported a misleading "PASS". Cleared build/verilator_system,
+build/verilator_obj etc. and rebuilt fresh before trusting any result from
+then on.
+
+--------------------------------------------------------------------------
+Verification (post-refactor, matched byte-for-byte / value-for-value
+against the real fresh baseline)
+--------------------------------------------------------------------------
+  tb_FIFO (bound to FIFO_sva)                        - TEST PASSED
+  tb_UART_Bridge (no SVA)                             - TEST PASSED
+  tb_System (no SVA, and again with FIFO_sva +
+             FIFO_All_sva bound)                      - TEST PASSED both ways
+  tb_Top_Module (no SVA)                              - identical trial-by-
+             trial random results, same pre-existing watchdog-timeout point
+  Controller_sva.sv / SRAM_sva.sv                     - fail at the exact
+             same line/error as the pre-refactor baseline (confirmed via
+             `make test_sva`) - not a regression
+
+No file needed to be reverted.
+
+================================================================================
+2. README.txt - documented the naming/parameterization rules
+================================================================================
+Request: organize the naming rules from section 1 and make them clear in
+the README (README.txt was previously empty).
+
+Wrote README.txt covering: the parameterization rule (ALL_CAPS_SNAKE_CASE,
+when to add one, what's deliberately left as a literal), the full
+mechanical variable-naming algorithm from section 1 with the approved
+abbreviation list (wea, ena, addr, reg) and a worked-examples table pulled
+from the real renames, and the scope exclusions (board-pinned Top_Module
+ports, instance names, src/No_Use/).
+
+================================================================================
+3. GEMM tiling validation - Stage 1 (host/tiling_algorithm_test.py)
+================================================================================
+Request (staged, "do not skip ahead" instructions): validate a GEMM-tiling
+scheme for the 4x4 array (split a K=8 x N=12 weight matrix into
+ceil(K/4) x ceil(N/4) sub-tiles, sum results across K-tiles within the same
+N-tile, concatenate across N-tiles) in three sequential stages - pure-Python
+algorithm check first, then a Verilator RTL testbench, then real hardware.
+
+Stage 1: pure Python/numpy, zero hardware/pyserial dependency. Generates a
+random M (1-10) x K=8 activation matrix and a fixed K=8 x N=12 int8 weight
+matrix each trial; computes each of the 6 sub-tile results independently
+(activation_slice @ weight_subblock) standing in for "what hardware would
+return"; stores all 6 raw results first; assembles in a separate pass (sum
+across K-tiles, concat across N-tiles); compares element-by-element against
+an int64-accumulated golden `activation @ weight`.
+
+Result: 20 trials (seeds 0-19), M ranging 2-10 across the run - ALL PASSED,
+zero mismatches. Reported and stopped per the staged instructions.
+
+================================================================================
+4. GEMM tiling validation - Stage 2 (tb/tb_Tiling.sv)
+================================================================================
+Request: same scheme, this time driving the real RTL over the actual UART
+register protocol (reusing tb_UART_Bridge.sv's send_write1/2/4/send_read
+style), through Top_Module, via Verilator. Purpose: exercise back-to-back
+weight-tile reconfiguration and popping more than one result per run -
+both previously unexercised (every earlier testbench used num_act=1 and a
+single weight load).
+
+Built tb_Tiling.sv: for each of the 6 (K-tile, N-tile) passes, writes the
+weight sub-block (REG_MODE + REG_ADDR_WGT_WT + REG_DIN_WGT per row),
+writes the activation's matching K-slice (same pattern via REG_ADDR_ACT_WT/
+REG_DIN_ACT for all M rows), sets BASE_WGT/BASE_ACT/NUM_ACT, pulses
+load_wgt then a single run pulse (which streams all M rows in hardware
+automatically), then loops M times toggling REG_CTRL's pop_ena bit
+0->1->0 (edge-triggered - discovered it must be explicitly cleared between
+pops, unlike every earlier testbench which only ever popped once) and
+reading back REG_RESULT. Golden reference computed SV-side with int32
+accumulation. K_TILES/N_TILES computed via ceil-division localparams, not
+hardcoded.
+
+Bug found (real, not a testbench artifact): for M=9 or M=10 (exceeding
+FIFO_DEPTH=8), the very first tile pass after reset came back wrong for
+exactly the last row - reproducibly, same values every run. Traced with
+per-cycle hierarchical monitors on Controller/FIFO_All internals: on every
+later tile pass the design correctly stalls STREAM at the FIFO-full point
+until a pop frees a slot, but on the very first pass after reset it did
+NOT stall - Offset_act swept straight through with no wait and FIFO_All's
+`counter` ended up at 9, one past its own FIFO_DEPTH=8 cap. Root cause:
+FIFO_All's admission gate (InjectEna = counter < FIFO_DEPTH) was fed by
+Systolic_Core.sv wiring `.inject(start)` - `start` is a REGISTERED pulse
+one cycle behind the actual same-cycle admission decision (Enb_act), so a
+9th row could be admitted before `counter` caught up, on the specific
+timing alignment that only lines up on the first-ever run.
+
+Fix (specified by the user, applied exactly as given): in Systolic_Core.sv,
+changed FIFO_All's `.inject(start)` to `.inject(Enb_act)` - counts the
+admission decision itself (combinational, same-cycle) instead of its
+delayed echo, closing the race.
+
+Verification after the fix:
+  - The exact repro (M=9, first pass after reset) - now passes.
+  - M=10 (forced via a temporary one-line testbench edit, reverted after
+    the confirmation run) - passes.
+  - 10+ further random seeds across M=1,3,5,7,9 - all pass.
+  - tb_System and tb_Top_Module (both instantiate Systolic_Core) re-run
+    after the fix - identical results to before, no regression. tb_FIFO/
+    tb_UART_Bridge don't touch this module.
+  - Final clean run of tb_Tiling.sv with the real M in [1,10] random range
+    restored: TEST PASSED, all 6 tile passes, all M rows.
+
+Reported and stopped per the staged instructions; Stage 3
+(host/tiling_hw_test.py, real FPGA over UART) not yet started.
+
+================================================================================
+Files changed this session
+================================================================================
+  Makefile                  - fixed SYSTOLIC_ARRAY.sv casing + added the 4
+                               missing SRCS entries (build-script fix only).
+  All 11 files in src/      - parameterized + renamed per section 1
+                               (Systolic_Core.sv additionally got the
+                               FIFO_All .inject(start) -> .inject(Enb_act)
+                               race fix in section 4).
+  All 6 files in sva/       - renamed per section 1; Controller_sva.sv/
+                               SRAM_sva.sv's pre-existing syntax bugs left
+                               unfixed (out of scope).
+  All 4 files in tb/        - renamed per section 1 (tb_FIFO.sv,
+                               tb_System.sv, tb_Top_module.sv,
+                               tb_UART_Bridge.sv).
+  README.txt                - was empty; now documents the naming/
+                               parameterization rules (section 2).
+  tb/tb_Tiling.sv            - new, Stage 2 tiling testbench (section 4).
+  host/tiling_algorithm_test.py - new, Stage 1 tiling check (section 3).
+
+Nothing was committed to git during this session.

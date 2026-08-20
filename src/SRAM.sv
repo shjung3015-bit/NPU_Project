@@ -1,24 +1,27 @@
 module SRAM(
 
     input logic clk, rst_n, ena, wea, enb,
-    input logic [9:0] addr_rd,
-    input logic [9:0] addr_wt,
+    input logic [9:0] AddrRd,
+    input logic [9:0] AddrWt,
 
     input logic [31:0] din,
     output logic [31:0] dout
 
 );
 
+    localparam ADDR_W = 10;
+    localparam DATA_W = 32;
+    localparam DEPTH  = 1 << ADDR_W;
 
-    logic [31:0] mem [1023:0];
+    logic [DATA_W-1:0] mem [DEPTH-1:0];
 
     always_ff@(posedge clk) begin
         if(!rst_n) begin
         end
-        else begin 
+        else begin
             if(ena) begin
                 if(wea) begin
-                    mem[addr_wt] <= din;
+                    mem[AddrWt] <= din;
                 end
             end
         end
@@ -30,7 +33,7 @@ module SRAM(
         end
         else begin
             if(enb) begin
-                dout <= mem[addr_rd];
+                dout <= mem[AddrRd];
             end
         end
     end

@@ -1,53 +1,57 @@
 module FIFO(
-    input logic clk, rst_n, 
+    input logic clk, rst_n,
     input logic wea, rea,
-    input logic [31:0] d_in,
+    input logic [31:0] DIn,
 
-    output logic ff_empty, ff_full,
-    output logic [31:0] d_out
+    output logic FfEmpty, FfFull,
+    output logic [31:0] DOut
 );
 
-    logic [31:0] mem_fifo [7:0];
-    logic [$clog2(8):0] wr_ptr, rd_ptr;
+    localparam FIFO_DEPTH = 8;
+    localparam DATA_W     = 32;
+    localparam PTR_W      = $clog2(FIFO_DEPTH);
 
-    assign ff_empty = (wr_ptr == rd_ptr);
-    assign ff_full = (wr_ptr[2:0]==rd_ptr[2:0]) && (wr_ptr[3] != rd_ptr[3]);
+    logic [DATA_W-1:0] MemFifo [FIFO_DEPTH-1:0];
+    logic [PTR_W:0] WrPtr, RdPtr;
+
+    assign FfEmpty = (WrPtr == RdPtr);
+    assign FfFull = (WrPtr[PTR_W-1:0]==RdPtr[PTR_W-1:0]) && (WrPtr[PTR_W] != RdPtr[PTR_W]);
 
 
     always_ff@(posedge clk) begin
         if(!rst_n) begin
-            wr_ptr <=0;
+            WrPtr <=0;
         end
-        else if(wea && !ff_full) begin 
-            wr_ptr <= wr_ptr + 1;
+        else if(wea && !FfFull) begin
+            WrPtr <= WrPtr + 1;
         end
         else begin
-            wr_ptr <= wr_ptr;
-        end 
+            WrPtr <= WrPtr;
+        end
     end
 
     always_ff@(posedge clk) begin
         if(!rst_n) begin
-            rd_ptr <=0;
+            RdPtr <=0;
         end
-        else if(rea && !ff_empty) begin 
-            rd_ptr <= rd_ptr + 1;
+        else if(rea && !FfEmpty) begin
+            RdPtr <= RdPtr + 1;
         end
         else begin
-            rd_ptr <= rd_ptr;
-        end 
+            RdPtr <= RdPtr;
+        end
     end
 
     always_ff@(posedge clk) begin
         if(!rst_n) begin
-            d_out <=0;
+            DOut <=0;
         end
         else begin
-            if(wea && !ff_full) begin
-                mem_fifo[wr_ptr[2:0]] <= d_in;
+            if(wea && !FfFull) begin
+                MemFifo[WrPtr[PTR_W-1:0]] <= DIn;
             end
-            if(rea && !ff_empty) begin
-                d_out <= mem_fifo[rd_ptr[2:0]];
+            if(rea && !FfEmpty) begin
+                DOut <= MemFifo[RdPtr[PTR_W-1:0]];
             end
         end
     end

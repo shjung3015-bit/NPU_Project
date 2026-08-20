@@ -1,44 +1,44 @@
 module Systolic_Core(
-    input logic clk, rst_n, run, load_wgt,
-    input logic ena_act, wea_act, ena_wgt, wea_wgt,
-    input logic [9:0] addr_act_wt, addr_wgt_wt,
-    input logic [9:0] base_addr_wgt, base_addr_act,
-    input [31:0] din_wgt, din_act,
-    input logic pop_ena,
-    input logic [9:0] num_act,
+    input logic clk, rst_n, run, Load_wgt,
+    input logic Ena_act, Wea_act, Ena_wgt, Wea_wgt,
+    input logic [9:0] AddrWt_act, AddrWt_wgt,
+    input logic [9:0] BaseAddr_wgt, BaseAddr_act,
+    input [31:0] Din_wgt, Din_act,
+    input logic PopEna,
+    input logic [9:0] Num_act,
 
     output logic signed [3:0][31:0] result,
-    output logic result_valid
+    output logic ResultValid
 );
 
-    logic [3:0] [7:0] dout_wgt;
-    logic [3:0] [7:0] dout_act;
+    logic [3:0] [7:0] Dout_wgt;
+    logic [3:0] [7:0] Dout_act;
 
-    logic enb_wgt, enb_act;
-    logic [9:0] addr_wgt_rd, addr_act_rd;
-    logic load_en, start;
-    logic [3:0] data_valid;
-    logic signed [3:0][31:0] data_out;
-    logic inject_ena;
+    logic Enb_wgt, Enb_act;
+    logic [9:0] AddrRd_wgt, AddrRd_act;
+    logic LoadEna, start;
+    logic [3:0] DataValid;
+    logic signed [3:0][31:0] DataOut;
+    logic InjectEna;
 
 
     Controller controller (
         .clk(clk),
         .rst_n(rst_n),
         .run(run),
-        .load_wgt(load_wgt),
-        .base_addr_wgt(base_addr_wgt),
-        .base_addr_act(base_addr_act),
-        .num_act(num_act),
-        .inject_ena(inject_ena),
+        .Load_wgt(Load_wgt),
+        .BaseAddr_wgt(BaseAddr_wgt),
+        .BaseAddr_act(BaseAddr_act),
+        .Num_act(Num_act),
+        .InjectEna(InjectEna),
 
-        .enb_wgt(enb_wgt),
-        .enb_act(enb_act),
-    
-        .addr_wgt(addr_wgt_rd),
-        .addr_act(addr_act_rd),
+        .Enb_wgt(Enb_wgt),
+        .Enb_act(Enb_act),
 
-        .load_en(load_en),
+        .Addr_wgt(AddrRd_wgt),
+        .Addr_act(AddrRd_act),
+
+        .LoadEna(LoadEna),
         .start(start)
     );
 
@@ -46,52 +46,52 @@ module Systolic_Core(
     SRAM SRAM_wgt (
         .clk(clk),
         .rst_n(rst_n),
-        .ena(ena_wgt),
-        .wea(wea_wgt),
-        .enb(enb_wgt),
-        .addr_rd(addr_wgt_rd),
-        .addr_wt(addr_wgt_wt),
-        .din(din_wgt),
+        .ena(Ena_wgt),
+        .wea(Wea_wgt),
+        .enb(Enb_wgt),
+        .AddrRd(AddrRd_wgt),
+        .AddrWt(AddrWt_wgt),
+        .din(Din_wgt),
 
-        .dout(dout_wgt)
+        .dout(Dout_wgt)
     );
 
     SRAM SRAM_act (
         .clk(clk),
         .rst_n(rst_n),
-        .ena(ena_act),
-        .wea(wea_act),
-        .enb(enb_act),
-        .addr_rd(addr_act_rd),
-        .addr_wt(addr_act_wt),
-        .din(din_act),
+        .ena(Ena_act),
+        .wea(Wea_act),
+        .enb(Enb_act),
+        .AddrRd(AddrRd_act),
+        .AddrWt(AddrWt_act),
+        .din(Din_act),
 
-        .dout(dout_act)
+        .dout(Dout_act)
     );
 
 
     Systolic_Array SA (
         .clk(clk),
         .rst_n(rst_n),
-        .load_en(load_en),
+        .LoadEna(LoadEna),
         .start(start),
-        .act_in(dout_act),
-        .wgt_in(dout_wgt),
-        .data_out(data_out),
-        .data_valid(data_valid)
+        .In_act(Dout_act),
+        .In_wgt(Dout_wgt),
+        .DataOut(DataOut),
+        .DataValid(DataValid)
     );
 
     FIFO_All FIFO (
         .clk(clk),
         .rst_n(rst_n),
-        .d_in(data_out),
-        .pop(pop_ena),
-        .data_valid(data_valid),
-        .inject(start),
+        .DIn(DataOut),
+        .pop(PopEna),
+        .DataValid(DataValid),
+        .inject(Enb_act),
 
-        .inject_ena(inject_ena),
-        .d_out(result),
-        .output_valid(result_valid)
+        .InjectEna(InjectEna),
+        .DOut(result),
+        .OutputValid(ResultValid)
     );
 
 

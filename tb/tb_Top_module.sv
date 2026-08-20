@@ -78,7 +78,7 @@ module tb_Top_Module;
     endtask
 
     // ---- background tx listener ----------------------------------------
-    logic [7:0] rx_queue [$];
+    logic [7:0] RxQueue [$];
 
     initial begin : tx_listener
         logic [7:0] b;
@@ -89,13 +89,13 @@ module tb_Top_Module;
                 b[i] = tx;
                 #(BIT_PERIOD);
             end
-            rx_queue.push_back(b);
+            RxQueue.push_back(b);
         end
     end
 
     task automatic recv_byte(output logic [7:0] b);
-        wait (rx_queue.size() > 0);
-        b = rx_queue.pop_front();
+        wait (RxQueue.size() > 0);
+        b = RxQueue.pop_front();
     endtask
 
     // Weight loading reads offsets 3,2,1,0 -> rows 0,1,2,3 of the array

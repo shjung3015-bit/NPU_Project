@@ -3,79 +3,79 @@ module UART_RX #(
 )(
     input logic clk, rst_n, rx,
 
-    output logic [7:0] rx_byte,
-    output logic rx_valid
+    output logic [7:0] RxByte,
+    output logic RxValid
 );
 
 
     parameter IDLE = 4'b0001, START = 4'b0010, DATA = 4'b0100, STOP = 4'b1000;
 
-    logic [3:0] next_state, current_state;
-    logic [3:0] bit_counter;
-    logic [7:0] st_counter, str_counter, da_counter;
-    logic [7:0] shift_reg;
-    logic rx_meta, rx_sync;
-    logic [4:0] idle_high_cnt;
+    logic [3:0] NextState, CurrentState;
+    logic [3:0] BitCounter;
+    logic [7:0] StCounter, StrCounter, DaCounter;
+    logic [7:0] ShiftReg;
+    logic RxMeta, RxSync;
+    logic [4:0] IdleHighCnt;
     localparam IDLE_CONFIRM = 16;
 
     always_ff@(posedge clk) begin
-        if(!rst_n) current_state <= IDLE;
-        else current_state <= next_state;
+        if(!rst_n) CurrentState <= IDLE;
+        else CurrentState <= NextState;
     end
 
     always_ff@(posedge clk) begin
         if(!rst_n) begin
-            rx_meta <=1'b1;
-            rx_sync <=1'b1;
+            RxMeta <=1'b1;
+            RxSync <=1'b1;
         end else begin
-            rx_meta <= rx;
-            rx_sync <= rx_meta;
+            RxMeta <= rx;
+            RxSync <= RxMeta;
         end
     end
 
     always_ff@(posedge clk) begin
-        if(!rst_n) idle_high_cnt <= 0;
-        else if(rx_sync) idle_high_cnt <= (idle_high_cnt == IDLE_CONFIRM) ? idle_high_cnt : idle_high_cnt + 1;
-        else idle_high_cnt <= 0;
+        if(!rst_n) IdleHighCnt <= 0;
+        else if(RxSync) IdleHighCnt <= (IdleHighCnt == IDLE_CONFIRM) ? IdleHighCnt : IdleHighCnt + 1;
+        else IdleHighCnt <= 0;
     end
 
-    wire line_idle_confirmed = (idle_high_cnt == IDLE_CONFIRM);
+    wire LineIdleConfirmed = (IdleHighCnt == IDLE_CONFIRM);
 
 
 
     always_comb begin
 
-        case(current_state)
-        
+        case(CurrentState)
+
             IDLE: begin
-                if(!rx_sync && line_idle_confirmed) next_state = START;
-                else next_state = IDLE;
+                if(!RxSync && LineIdleConfirmed) NextState = START;
+                else NextState = IDLE;
             end
 
             START: begin
-                if(!rx_sync) begin
-                    if(str_counter == CLKS_PER_BIT/2 - 1) next_state = DATA;
-                    else next_state = START;
+                if(!RxSync) begin
+                    if(StrCounter == CLKS_PER_BIT/2 - 1) NextState = DATA;
+                    else NextState = START;
                 end else begin
-                    next_state = IDLE;
+                    NextState = IDLE;
                 end
             end
 
             DATA: begin
-                if((bit_counter == 8)) next_state = STOP;
-                else next_state = DATA;
+                if((BitCounter == 8)) NextState = STOP;
+                else NextState = DATA;
             end
 
             STOP: begin
-                if(rx_sync) begin
-                    if(st_counter == CLKS_PER_BIT-1) next_state = IDLE;
-                    else next_state = STOP;
+                if(RxSync) begin
+                    if(StCounter == CLKS_PER_BIT-1) NextState = IDLE;
+                    else NextState = STOP;
                 end else begin
-                    next_state = IDLE;
+                    NextState = IDLE;
                 end
             end
 
-            default: next_state = IDLE;
+            default: NextState = IDLE;
         endcase
 
     end
@@ -83,50 +83,50 @@ module UART_RX #(
     always_ff@(posedge clk) begin
 
         if(!rst_n) begin
-            st_counter <=0;
-            str_counter <=0;
-            bit_counter <=0;
-            da_counter <=0;
-            shift_reg <=0;
-            rx_byte <=0;
-            rx_valid<=0;
+            StCounter <=0;
+            StrCounter <=0;
+            BitCounter <=0;
+            DaCounter <=0;
+            ShiftReg <=0;
+            RxByte <=0;
+            RxValid<=0;
         end
 
-        else begin 
-            rx_valid <=0;
-            
-            case(current_state)
+        else begin
+            RxValid <=0;
+
+            case(CurrentState)
 
                 IDLE: begin
-                    str_counter <=0;
-                    da_counter <=0;
-                    st_counter <=0;
-                    bit_counter <=0;
+                    StrCounter <=0;
+                    DaCounter <=0;
+                    StCounter <=0;
+                    BitCounter <=0;
                 end
 
                 START: begin
-                    str_counter <= str_counter + 1; 
+                    StrCounter <= StrCounter + 1;
                 end
 
                 DATA: begin
-                    if(bit_counter == 8) begin 
-                        rx_byte <= shift_reg;
-                        rx_valid <= 1;
+                    if(BitCounter == 8) begin
+                        RxByte <= ShiftReg;
+                        RxValid <= 1;
                     end
                     else begin
-                        if(da_counter == CLKS_PER_BIT - 1) begin
-                            da_counter <= 0;
-                            shift_reg <= {rx_sync, shift_reg[7:1]};
-                            bit_counter <= bit_counter + 1;
+                        if(DaCounter == CLKS_PER_BIT - 1) begin
+                            DaCounter <= 0;
+                            ShiftReg <= {RxSync, ShiftReg[7:1]};
+                            BitCounter <= BitCounter + 1;
                         end
-                        else da_counter <=da_counter +1;                    
+                        else DaCounter <=DaCounter +1;
                         end
                 end
 
                 STOP: begin
-                    st_counter <= st_counter + 1;
+                    StCounter <= StCounter + 1;
                 end
             endcase
         end
     end
-endmodule 
+endmodule

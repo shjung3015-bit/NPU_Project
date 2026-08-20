@@ -7,17 +7,17 @@ module Top_Module(
     output logic [4:0] dbg_state
 );
 
-    
-    logic signed [3:0][31:0] result;
-    logic result_valid;
 
-    logic run, load_wgt; 
-    logic ena_act, wea_act, ena_wgt, wea_wgt;
-    logic [9:0] addr_act_wt, addr_wgt_wt;
-    logic [9:0] base_addr_wgt, base_addr_act;
-    logic [31:0] din_wgt, din_act;
-    logic pop_ena;
-    logic [9:0] num_act;
+    logic signed [3:0][31:0] result;
+    logic ResultValid;
+
+    logic run, Load_wgt;
+    logic Ena_act, Wea_act, Ena_wgt, Wea_wgt;
+    logic [9:0] AddrWt_act, AddrWt_wgt;
+    logic [9:0] BaseAddr_wgt, BaseAddr_act;
+    logic [31:0] Din_wgt, Din_act;
+    logic PopEna;
+    logic [9:0] Num_act;
 
     UART_Bridge U_Bridge(
 
@@ -25,24 +25,24 @@ module Top_Module(
         .rst_n(rst_n),
         .rx(rx),
         .result(result),
-        .result_valid(result_valid),
+        .ResultValid(ResultValid),
 
         .tx(tx),
         .run(run),
-        .load_wgt(load_wgt),
-        .ena_act(ena_act),
-        .wea_act(wea_act),
-        .ena_wgt(ena_wgt),
-        .wea_wgt(wea_wgt),
-        .addr_act_wt(addr_act_wt),
-        .addr_wgt_wt(addr_wgt_wt),
-        .base_addr_act(base_addr_act),
-        .base_addr_wgt(base_addr_wgt),
-        .din_wgt(din_wgt),
-        .din_act(din_act),
-        .pop_ena(pop_ena),
-        .num_act(num_act),
-        .bridge_busy(busy),
+        .Load_wgt(Load_wgt),
+        .Ena_act(Ena_act),
+        .Wea_act(Wea_act),
+        .Ena_wgt(Ena_wgt),
+        .Wea_wgt(Wea_wgt),
+        .AddrWt_act(AddrWt_act),
+        .AddrWt_wgt(AddrWt_wgt),
+        .BaseAddr_act(BaseAddr_act),
+        .BaseAddr_wgt(BaseAddr_wgt),
+        .Din_wgt(Din_wgt),
+        .Din_act(Din_act),
+        .PopEna(PopEna),
+        .Num_act(Num_act),
+        .BridgeBusy(busy),
         .dbg_state(dbg_state)
     );
 
@@ -50,22 +50,22 @@ module Top_Module(
         .clk(clk),
         .rst_n(rst_n),
         .run(run),
-        .load_wgt(load_wgt),
-        .ena_act(ena_act),
-        .wea_act(wea_act),
-        .ena_wgt(ena_wgt),
-        .wea_wgt(wea_wgt),
-        .addr_act_wt(addr_act_wt),
-        .addr_wgt_wt(addr_wgt_wt),
-        .base_addr_act(base_addr_act),
-        .base_addr_wgt(base_addr_wgt),
-        .din_wgt(din_wgt),
-        .din_act(din_act),
-        .pop_ena(pop_ena),
-        .num_act(num_act),
+        .Load_wgt(Load_wgt),
+        .Ena_act(Ena_act),
+        .Wea_act(Wea_act),
+        .Ena_wgt(Ena_wgt),
+        .Wea_wgt(Wea_wgt),
+        .AddrWt_act(AddrWt_act),
+        .AddrWt_wgt(AddrWt_wgt),
+        .BaseAddr_act(BaseAddr_act),
+        .BaseAddr_wgt(BaseAddr_wgt),
+        .Din_wgt(Din_wgt),
+        .Din_act(Din_act),
+        .PopEna(PopEna),
+        .Num_act(Num_act),
 
         .result(result),
-        .result_valid(result_valid)
+        .ResultValid(ResultValid)
     );
 
 
