@@ -1,3 +1,7 @@
 build/
 *.vvp
 *.vcd
+fpga_bringup/*.fs
+fpga_bringup/*.json
+src/top.json
+build_v/
