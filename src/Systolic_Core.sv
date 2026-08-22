@@ -4,7 +4,6 @@ module Systolic_Core(
     input logic [9:0] AddrWt_act, AddrWt_wgt,
     input logic [9:0] BaseAddr_wgt, BaseAddr_act,
     input [31:0] Din_wgt, Din_act,
-    input logic PopEna,
     input logic [9:0] Num_act,
 
     output logic signed [3:0][31:0] result,
@@ -85,7 +84,6 @@ module Systolic_Core(
         .clk(clk),
         .rst_n(rst_n),
         .DIn(DataOut),
-        .pop(PopEna),
         .DataValid(DataValid),
         .inject(Enb_act),
 

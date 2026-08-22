@@ -8,11 +8,14 @@ TB_DIR = tb
 BUILD_DIR = build
 SVA_DIR = sva
 
-SRCS = $(SRC_DIR)/Top_Module.sv $(SRC_DIR)/Controller.sv $(SRC_DIR)/FIFO_All.sv $(SRC_DIR)/FIFO.sv $(SRC_DIR)/MAC_Unit.sv $(SRC_DIR)/SKEW_Unit.sv $(SRC_DIR)/SRAM.sv $(SRC_DIR)/Systolic_Array.sv $(SRC_DIR)/Systolic_Core.sv $(SRC_DIR)/UART_Bridge.sv $(SRC_DIR)/UART_RX.sv $(SRC_DIR)/UART_TX.sv
+SRCS = $(SRC_DIR)/Top_Module.sv $(SRC_DIR)/Accumulator.sv $(SRC_DIR)/Adder.sv $(SRC_DIR)/Controller.sv $(SRC_DIR)/FIFO_All.sv $(SRC_DIR)/FIFO.sv $(SRC_DIR)/MAC_Unit.sv $(SRC_DIR)/SKEW_Unit.sv $(SRC_DIR)/SRAM.sv $(SRC_DIR)/Systolic_Array.sv $(SRC_DIR)/Systolic_Core.sv $(SRC_DIR)/UART_Bridge.sv $(SRC_DIR)/UART_RX.sv $(SRC_DIR)/UART_TX.sv
 
 TB = $(TB_DIR)/tb_Top_module.sv
 
 OUT = $(BUILD_DIR)/tb_Top_module.vvp
+
+TB_ACC = $(TB_DIR)/tb_Accumulator.sv
+OUT_ACC = $(BUILD_DIR)/tb_Accumulator.vvp
 
 SVAS = $(SVA_DIR)/bind.sv $(SVA_DIR)/FIFO_sva.sv $(SVA_DIR)/FIFO_All_sva.sv $(SVA_DIR)/SRAM_sva.sv $(SVA_DIR)/Controller_sva.sv
 
@@ -25,6 +28,12 @@ test: $(OUT)
 
 $(OUT): $(SRCS) $(TB) $(SVAS) | $(BUILD_DIR)
 	$(IVERILOG) $(FLAGS) -o $(OUT) $(SRCS) $(TB) $(SVAS)
+
+test_accumulator: $(OUT_ACC)
+	cd $(BUILD_DIR) && $(VVP) $(notdir $(OUT_ACC))
+
+$(OUT_ACC): $(SRC_DIR)/Accumulator.sv $(SRC_DIR)/Adder.sv $(SRC_DIR)/SRAM.sv $(TB_ACC) | $(BUILD_DIR)
+	$(IVERILOG) $(FLAGS) -o $(OUT_ACC) $(SRC_DIR)/Accumulator.sv $(SRC_DIR)/Adder.sv $(SRC_DIR)/SRAM.sv $(TB_ACC)
 
 test_sva: $(BUILD_DIR)
 	$(VERILATOR) --binary --assert --timing -Wall -Wno-fatal \
@@ -44,4 +53,4 @@ wave: $(OUT)
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: test test_sva wave clean
+.PHONY: test test_accumulator test_sva wave clean

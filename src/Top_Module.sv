@@ -8,8 +8,8 @@ module Top_Module(
 );
 
 
-    logic signed [3:0][31:0] result;
-    logic ResultValid;
+    logic signed [3:0][31:0] result, dout;
+    logic ResultValid, dout_Valid;
 
     logic run, Load_wgt;
     logic Ena_act, Wea_act, Ena_wgt, Wea_wgt;
@@ -19,13 +19,15 @@ module Top_Module(
     logic PopEna;
     logic [9:0] Num_act;
 
+    logic AddEna, TileStart; // AddEna, TileStart
+
     UART_Bridge U_Bridge(
 
         .clk(clk),
         .rst_n(rst_n),
         .rx(rx),
-        .result(result),
-        .ResultValid(ResultValid),
+        .result(dout),
+        .ResultValid(dout_Valid),
 
         .tx(tx),
         .run(run),
@@ -43,7 +45,10 @@ module Top_Module(
         .PopEna(PopEna),
         .Num_act(Num_act),
         .BridgeBusy(busy),
-        .dbg_state(dbg_state)
+        .dbg_state(dbg_state),
+
+        .TileStart(TileStart),
+        .AddEna(AddEna)
     );
 
     Systolic_Core S_Core(
@@ -61,12 +66,25 @@ module Top_Module(
         .BaseAddr_wgt(BaseAddr_wgt),
         .Din_wgt(Din_wgt),
         .Din_act(Din_act),
-        .PopEna(PopEna),
         .Num_act(Num_act),
 
         .result(result),
         .ResultValid(ResultValid)
     );
+
+    Accumulator Acc(
+        .clk(clk),
+        .rst_n(rst_n),
+        .Core_Result(result),
+        .CoreResultValid(ResultValid),
+        .AddEna(AddEna), //AddEna
+        .TileStart(TileStart), //TileStart
+        .Pop(PopEna),
+
+        .dout(dout),
+        .Output_Valid(dout_Valid)
+    );
+
 
 
 endmodule

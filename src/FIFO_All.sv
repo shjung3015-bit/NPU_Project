@@ -1,7 +1,6 @@
 module FIFO_All(
     input logic clk, rst_n,
     input logic [3:0] [31:0] DIn,
-    input logic pop,
     input logic [3:0] DataValid,
 
     input logic inject,
@@ -16,29 +15,13 @@ module FIFO_All(
 
     logic [3:0] FfEmpty, FfFull;
     logic AllReady;
-    logic PopFire;
-    logic PopPrev, PopEdge;
 
-    // pop comes from the (slow, externally-controlled) host register
-    // interface and can stay asserted for a huge number of clocks --
-    // edge-detect it so one host-visible pop request drains exactly one
-    // entry instead of free-running every cycle AllReady stays true.
-    always_ff@(posedge clk) begin
-        if(!rst_n) PopPrev <= 1'b0;
-        else       PopPrev <= pop;
-    end
 
     assign AllReady = &(~FfEmpty);
-    assign PopEdge = pop && !PopPrev;
-    assign PopFire = AllReady && PopEdge;
 
-    // OutputValid must line up with the cycle DOut actually holds the
-    // popped data, which lags PopFire by 1 cycle (each FIFO's DOut is
-    // registered), so it's a delayed copy of PopFire rather than the
-    // same combinational signal used to drive rea below.
     always_ff@(posedge clk) begin
         if(!rst_n) OutputValid <= 1'b0;
-        else       OutputValid <= PopFire;
+        else       OutputValid <= AllReady;
     end
 
     genvar i;
@@ -48,7 +31,7 @@ module FIFO_All(
             .clk(clk),
             .rst_n(rst_n),
             .wea(DataValid[i]),
-            .rea(PopFire),
+            .rea(AllReady),
             .DIn(DIn[i]),
 
             .FfEmpty(FfEmpty[i]),
@@ -63,7 +46,7 @@ module FIFO_All(
         if(!rst_n) begin
             counter <= 0;
         end
-        else case({inject, PopFire})
+        else case({inject, AllReady})
             2'b10: begin
                 counter <= counter + 1;
             end
