@@ -4,6 +4,7 @@ module Accumulator(
     input logic CoreResultValid,
     input logic AddEna, Pop, TileStart,
 
+    output logic WriteEnable,
     output logic signed [3:0][31:0] dout,
     output logic Output_Valid
 );
@@ -15,7 +16,6 @@ module Accumulator(
     logic signed [3:0][31:0] InputData_SRAM, OutputData_SRAM;
     logic signed [3:0][31:0] Result;
     logic signed [3:0][31:0] Core_Result_Delay;
-    logic WriteEnable;
     logic AddEna_Delay;
 
     logic PopEdge, PopPrev;

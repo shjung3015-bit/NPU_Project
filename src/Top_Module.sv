@@ -18,6 +18,7 @@ module Top_Module(
     logic [31:0] Din_wgt, Din_act;
     logic PopEna;
     logic [9:0] Num_act;
+    logic WriteCommit;
 
     logic AddEna, TileStart; // AddEna, TileStart
 
@@ -81,6 +82,7 @@ module Top_Module(
         .TileStart(TileStart), //TileStart
         .Pop(PopEna),
 
+        .WriteEnable(WriteCommit),
         .dout(dout),
         .Output_Valid(dout_Valid)
     );
