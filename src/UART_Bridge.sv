@@ -13,7 +13,9 @@ module UART_Bridge(
     output logic PopEna,
     output logic [9:0] Num_act,
     output logic BridgeBusy,
-    output logic [4:0] dbg_state
+    output logic [4:0] dbg_state,
+
+    output logic TileStart, AddEna
 
 );
 
@@ -38,6 +40,8 @@ module UART_Bridge(
     localparam REG_DIN_ACT     = 8'h07;
     localparam REG_DIN_WGT     = 8'h08;
     localparam REG_RESULT      = 8'h09;
+
+    localparam REG_ACC_CTRL    = 8'h10; //AddEna, TileStart를 넣기위한 임시 Command
 
     logic [7:0] TxData;
     logic TxTrigger;
@@ -104,6 +108,9 @@ always_ff@(posedge clk) begin
         Din_act <= 0;
         Din_wgt <= 0;
 
+        AddEna <= 0; // AddEna
+        TileStart <= 0; //TileStart
+
     end
     else begin
         case (CurrentState)
@@ -128,6 +135,8 @@ always_ff@(posedge clk) begin
                         REG_DIN_ACT:     ByteRemain <= MAX_WRITE_BYTES;
                         REG_DIN_WGT:     ByteRemain <= MAX_WRITE_BYTES;
                         REG_RESULT:      ByteRemain <= RESULT_BYTES;
+
+                        REG_ACC_CTRL:   ByteRemain <= 1; //AddEna, TileStart
                     endcase
                 end
             end
@@ -153,6 +162,8 @@ always_ff@(posedge clk) begin
                         REG_NUM_ACT:     Num_act <= {TempBuf[0], TempBuf[1]};
                         REG_DIN_ACT:     Din_act <= {TempBuf[0], TempBuf[1], TempBuf[2], TempBuf[3]};
                         REG_DIN_WGT:     Din_wgt <= {TempBuf[0], TempBuf[1], TempBuf[2], TempBuf[3]};
+
+                        REG_ACC_CTRL:   {TileStart, AddEna} <= TempBuf[0][1:0]; //AddEna, TileStart
                         default : ;
                     endcase
                 end
