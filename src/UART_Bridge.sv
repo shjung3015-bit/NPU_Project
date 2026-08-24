@@ -7,15 +7,17 @@ module UART_Bridge(
     output logic tx,
     output logic run, Load_wgt,
     output logic Ena_act, Wea_act, Ena_wgt, Wea_wgt,
-    output logic [9:0] AddrWt_act, AddrWt_wgt,
-    output logic [9:0] BaseAddr_wgt, BaseAddr_act,
+    output logic [9:0] AddrWt_act, AddrWt_wgt, //Setup 단계에서 사용하는 신호
+    output logic [9:0] BaseAddr_wgt, BaseAddr_act, //실제 계산 단계에서 사용하는 신호
     output logic [31:0] Din_wgt, Din_act,
     output logic PopEna,
     output logic [9:0] Num_act,
     output logic BridgeBusy,
     output logic [4:0] dbg_state,
 
-    output logic TileStart, AddEna
+    output logic TileStart, AddEna,
+    output logic [7:0] Num_K_Tile,
+    output logic LoopStart
 
 );
 
@@ -30,7 +32,7 @@ module UART_Bridge(
     localparam RESULT_BYTES   = 1 + NUM_LANES*4;
     localparam MAX_WRITE_BYTES = 4;
 
-    localparam REG_CTRL        = 8'h00; // {run, Load_wgt, PopEna}
+    localparam REG_CTRL        = 8'h00; // {run, Load_wgt, PopEna, LoopStart}
     localparam REG_MODE        = 8'h01; // {Ena_act, Wea_act, Ena_wgt, Wea_wgt}
     localparam REG_ADDR_ACT_WT = 8'h02;
     localparam REG_ADDR_WGT_WT = 8'h03;
@@ -41,7 +43,9 @@ module UART_Bridge(
     localparam REG_DIN_WGT     = 8'h08;
     localparam REG_RESULT      = 8'h09;
 
-    localparam REG_ACC_CTRL    = 8'h10; //AddEna, TileStart를 넣기위한 임시 Command
+    localparam REG_ACC_CTRL    = 8'h10; //AddEna, TileStart를 넣기위한 Command
+    localparam REG_NUM_K_TILE = 8'h12; //K-tile이 몇 개인지 받는 Command
+
 
     logic [7:0] TxData;
     logic TxTrigger;
@@ -110,6 +114,8 @@ always_ff@(posedge clk) begin
 
         AddEna <= 0; // AddEna
         TileStart <= 0; //TileStart
+        Num_K_Tile <= 0; //K-Tile 개수
+        LoopStart <= 0; //LoopStart 신호
 
     end
     else begin
@@ -137,6 +143,7 @@ always_ff@(posedge clk) begin
                         REG_RESULT:      ByteRemain <= RESULT_BYTES;
 
                         REG_ACC_CTRL:   ByteRemain <= 1; //AddEna, TileStart
+                        REG_NUM_K_TILE: ByteRemain <= 1; // K-Tile 개수
                     endcase
                 end
             end
@@ -153,7 +160,7 @@ always_ff@(posedge clk) begin
             COMMIT: begin
                 if(cmd == WRITE) begin
                     case (addr)
-                        REG_CTRL:        {run, Load_wgt, PopEna} <= TempBuf[0][2:0];
+                        REG_CTRL:        {run, Load_wgt, PopEna, LoopStart} <= TempBuf[0][3:0];
                         REG_MODE:        {Ena_act, Wea_act, Ena_wgt, Wea_wgt} <= TempBuf[0][3:0];
                         REG_ADDR_ACT_WT: AddrWt_act <= {TempBuf[0], TempBuf[1]};
                         REG_ADDR_WGT_WT: AddrWt_wgt <= {TempBuf[0], TempBuf[1]};
@@ -164,6 +171,7 @@ always_ff@(posedge clk) begin
                         REG_DIN_WGT:     Din_wgt <= {TempBuf[0], TempBuf[1], TempBuf[2], TempBuf[3]};
 
                         REG_ACC_CTRL:   {TileStart, AddEna} <= TempBuf[0][1:0]; //AddEna, TileStart
+                        REG_NUM_K_TILE: Num_K_Tile <= TempBuf[0];
                         default : ;
                     endcase
                 end
