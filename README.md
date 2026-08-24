@@ -21,12 +21,13 @@ Top_Module
 │   ├── SRAM (wgt / act)       가중치·활성값 버퍼
 │   ├── Systolic_Array         MAC_Unit × 4×4 + SKEW_Unit
 │   └── FIFO_All               코어 출력 결과 버퍼링/드레인
-└── Accumulator                K-tile 부분합 read-modify-write 누적 + 최종 결과 팝아웃
-    ├── SRAM × 4 (lane별)
-    └── Adder × 4
+├── Accumulator                K-tile 부분합 read-modify-write 누적 + 최종 결과 팝아웃
+│   ├── SRAM × 4 (lane별)
+│   └── Adder × 4
+└── LoopMatmul                K-tile 루프 자동화: 가중치 재로드 → 스트리밍 → 누적을 하드웨어가 반복
 ```
 
-> **진행 중**: `Systolic_Core`와 `Accumulator`를 감싸서 K-tile 루프(가중치 재로드 → 스트리밍 → 누적)를 하드웨어에서 자동으로 반복하는 `LoopMatmul` 컨트롤러를 설계 중입니다. 완성되면 위 계층에서 `LoopMatmul`이 `Systolic_Core`/`Accumulator`를 감싸는 형태로 바뀌고, host는 K-tile 개수만 지정하면 나머지는 하드웨어가 알아서 처리하게 됩니다. 지금은 host(UART)가 매 K-tile마다 `AddEna`/`TileStart`를 직접 제어합니다.
+`Systolic_Core`/`Accumulator`를 감싸는 대신, `LoopMatmul`은 `Top_Module` 아래 형제 모듈로 두고 `run`/`Load_wgt`/`BaseAddr_wgt`/`BaseAddr_act`/`TileStart`/`AddEna` 6개 제어 신호만 `Top_Module` 레벨에서 먹스(`LoopActive || LoopStart` 선택)로 중재합니다. 평소엔 host(UART)가 이 신호들을 직접 제어하고(수동 모드), host가 `LoopStart`를 올리면 그 순간부터 `LoopMatmul`이 `Num_K_Tile`만큼 가중치 재로드·스트리밍·누적을 자동으로 반복합니다(자동 모드).
 
 ## 현재 상태
 
@@ -34,7 +35,8 @@ Top_Module
 - [x] UART 기반 host-device 레지스터 맵 프로토콜
 - [x] Accumulator: K-tile read-modify-write 누적, `TileStart`/`Pop` 엣지 검출, 순차 팝아웃 — 시뮬레이션 검증 완료
 - [x] SVA 기반 정형 검증 (`FIFO`, `FIFO_All`, `SRAM`, `Controller`, `MAC_Unit`, `Systolic_Array`)
-- [ ] `LoopMatmul` — K-tile 루프 하드웨어 자동화 (설계 중)
+- [ ] `LoopMatmul` — K-tile 루프 하드웨어 자동화: RTL 설계 + 시뮬레이션 검증 완료(K=4/8/12, golden model 대비 전부 일치), FPGA 실물 검증은 아직
+- [ ] K가 4의 배수가 아닌 경우(나머지 처리/제로 패딩)
 - [ ] N(출력 열) 방향 타일링
 - [ ] 실제 신경망 레이어(예: 양자화된 소형 MLP) 가속 데모
 
@@ -57,6 +59,7 @@ Icarus Verilog와 Verilator가 필요합니다.
 ```bash
 make test              # 전체 시스템 테스트벤치 (Icarus)
 make test_accumulator  # Accumulator 단독 테스트벤치 (Icarus)
+make test_loopmatmul   # LoopMatmul 하드웨어 K-타일 루프 테스트벤치, K=4/8/12 (Icarus)
 make test_sva          # Verilator + SVA 정형 검증
 make wave               # 파형(GTKWave) 확인
 ```
