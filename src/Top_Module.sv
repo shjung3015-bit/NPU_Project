@@ -29,8 +29,11 @@ module Top_Module(
     logic run_Bridge, Load_wgt_Bridge;
     logic [9:0] BaseAddr_wgt_Bridge, BaseAddr_act_Bridge;
     logic AddEna_Bridge, TileStart_Bridge;
-    logic [7:0] Num_K_Tile;
+    logic [7:0] K_Num_Tile;
     logic LoopStart, LoopActive;
+
+    logic [9:0] N_TileBase_REG;
+    logic [7:0] N_Num_Tile;
 
     assign run = (LoopActive || LoopStart) ? run_Loop : run_Bridge;
     assign Load_wgt = (LoopActive || LoopStart) ? Load_wgt_Loop : Load_wgt_Bridge;
@@ -69,7 +72,8 @@ module Top_Module(
 
         .TileStart(TileStart_Bridge),
         .AddEna(AddEna_Bridge),
-        .Num_K_Tile(Num_K_Tile),
+        .K_Num_Tile(K_Num_Tile),
+        .N_Num_Tile(N_Num_Tile),
         .LoopStart(LoopStart)
     );
 
@@ -102,26 +106,29 @@ module Top_Module(
         .AddEna(AddEna), //AddEna
         .TileStart(TileStart), //TileStart
         .Pop(PopEna),
+        .N_TileBase_REG(N_TileBase_REG),
 
         .WriteEnable(WriteCommit),
         .dout(dout),
         .Output_Valid(dout_Valid)
     );
 
-    LoopMatmul LMM(
+    N_LoopMatmul LMM(
         .clk(clk),
         .rst_n(rst_n),
-        .LoopStart(LoopStart),
-        .Num_K_Tile(Num_K_Tile),
+        .N_LoopStart(LoopStart),
+        .K_Num_Tile(K_Num_Tile),
+        .N_Num_Tile(N_Num_Tile),
         .WriteCommit(WriteCommit),
         .Num_act(Num_act),
         .BaseAddr_wgt_in(BaseAddr_wgt_Bridge),
         .BaseAddr_act_in(BaseAddr_act_Bridge),
 
-        .run(run_Loop), 
+        .run(run_Loop),
         .Load_wgt(Load_wgt_Loop),
         .BaseAddr_wgt(BaseAddr_wgt_Loop),
         .BaseAddr_act(BaseAddr_act_Loop),
+        .N_TileBase_REG(N_TileBase_REG),
         .AddEna(AddEna_Loop),
         .TileStart(TileStart_Loop),
         .LoopActive(LoopActive)
