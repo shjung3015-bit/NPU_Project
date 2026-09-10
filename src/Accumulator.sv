@@ -4,6 +4,8 @@ module Accumulator(
     input logic CoreResultValid,
     input logic AddEna, Pop, TileStart,
 
+    input logic [9:0] N_TileBase_REG,
+
     output logic WriteEnable,
     output logic signed [3:0][31:0] dout,
     output logic Output_Valid
@@ -52,7 +54,7 @@ module Accumulator(
         end
         else begin
             WriteEnable <= CoreResultValid;
-            if(TileStartEdge) Addr_Counter <= 0;
+            if(TileStartEdge) Addr_Counter <= N_TileBase_REG;
             else if(CoreResultValid) Addr_Counter <= Addr_Counter + 1;
             Addr_Counter_Delay <= Addr_Counter;
             Core_Result_Delay <= Core_Result;

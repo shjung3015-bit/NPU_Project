@@ -16,7 +16,8 @@ module UART_Bridge(
     output logic [4:0] dbg_state,
 
     output logic TileStart, AddEna,
-    output logic [7:0] Num_K_Tile,
+    output logic [7:0] K_Num_Tile,
+    output logic [7:0] N_Num_Tile,
     output logic LoopStart
 
 );
@@ -44,7 +45,9 @@ module UART_Bridge(
     localparam REG_RESULT      = 8'h09;
 
     localparam REG_ACC_CTRL    = 8'h10; //AddEna, TileStart를 넣기위한 Command
-    localparam REG_NUM_K_TILE = 8'h12; //K-tile이 몇 개인지 받는 Command
+    localparam REG_K_NUM_TILE = 8'h12; //K-tile이 몇 개인지 받는 Command
+
+    localparam REG_N_NUM_TILE = 8'h13; //N-tile이 몇 개인지 받는 Command
 
 
     logic [7:0] TxData;
@@ -114,7 +117,8 @@ always_ff@(posedge clk) begin
 
         AddEna <= 0; // AddEna
         TileStart <= 0; //TileStart
-        Num_K_Tile <= 0; //K-Tile 개수
+        K_Num_Tile <= 0; //K-Tile 개수
+        N_Num_Tile <= 0; //N-Tile 개수
         LoopStart <= 0; //LoopStart 신호
 
     end
@@ -143,7 +147,8 @@ always_ff@(posedge clk) begin
                         REG_RESULT:      ByteRemain <= RESULT_BYTES;
 
                         REG_ACC_CTRL:   ByteRemain <= 1; //AddEna, TileStart
-                        REG_NUM_K_TILE: ByteRemain <= 1; // K-Tile 개수
+                        REG_K_NUM_TILE: ByteRemain <= 1; // K-Tile 개수
+                        REG_N_NUM_TILE: ByteRemain <= 1; // N-Tile 개수
                     endcase
                 end
             end
@@ -171,7 +176,8 @@ always_ff@(posedge clk) begin
                         REG_DIN_WGT:     Din_wgt <= {TempBuf[0], TempBuf[1], TempBuf[2], TempBuf[3]};
 
                         REG_ACC_CTRL:   {TileStart, AddEna} <= TempBuf[0][1:0]; //AddEna, TileStart
-                        REG_NUM_K_TILE: Num_K_Tile <= TempBuf[0];
+                        REG_K_NUM_TILE: K_Num_Tile <= TempBuf[0];
+                        REG_N_NUM_TILE: N_Num_Tile <= TempBuf[0];
                         default : ;
                     endcase
                 end

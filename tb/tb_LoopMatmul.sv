@@ -46,6 +46,7 @@ module tb_LoopMatmul;
     localparam logic [7:0] REG_DIN_WGT     = 8'h08;
     localparam logic [7:0] REG_RESULT      = 8'h09;
     localparam logic [7:0] REG_NUM_K_TILE  = 8'h12;
+    localparam logic [7:0] REG_NUM_N_TILE  = 8'h13;
 
     logic clk, rst_n, rx, tx, busy;
     int errors = 0;
@@ -198,6 +199,11 @@ module tb_LoopMatmul;
         send_addr(REG_BASE_ACT, 10'd0);
         send_write2(REG_NUM_ACT, 8'h00, M[7:0]);
         send_write1(REG_NUM_K_TILE, K_TILES[7:0]);
+        // Top_Module now always routes LoopStart through N_LoopMatmul, which
+        // wraps this K-loop in an outer N-tile loop; N_Num_Tile=1 makes it
+        // finish after the single N-tile this K-only test exercises (0 would
+        // underflow Num_N_Tile_REG-1 to 255 and phantom-loop the K-sweep).
+        send_write1(REG_NUM_N_TILE, 8'h01);
         repeat (5) @(negedge clk);
 
         // single LoopStart pulse: LoopMatmul now drives Load_wgt/run/AddEna/
