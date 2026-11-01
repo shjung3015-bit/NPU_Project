@@ -5,3 +5,9 @@ fpga_bringup/*.fs
 fpga_bringup/*.json
 src/top.json
 build_v/
+
+# 개인 메모·AI 세션 기록 (공개 저장소에 올리지 않음)
+YCC_*.md
+Transcript/
+.claude/
+host/claude_code_prompt_*.md
