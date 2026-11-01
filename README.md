@@ -9,6 +9,21 @@ FPGA 위에 시스톨릭 어레이 기반 소형 NPU(행렬곱 가속기)를 처
 - **호스트 인터페이스**: UART로 레지스터 맵 기반 프로토콜(WRITE/READ + 주소 + 데이터)을 통해 host(PC)와 통신
 - **검증**: Icarus Verilog 시뮬레이션 + Verilator 기반 SystemVerilog Assertion(SVA)으로 이중 검증 후 실물 FPGA(Tang Nano 9K)에서 브링업
 
+## 주요 사양
+
+| 항목 | 값 |
+|---|---|
+| 연산 구조 | 4×4 시스톨릭 어레이, weight-stationary |
+| 데이터 폭 | 입력 INT8 (signed), 부분합 32비트 |
+| 타깃 보드 | Tang Nano 9K (Gowin GW1NR-9), 27 MHz |
+| 호스트 인터페이스 | UART 115200 bps, 레지스터 맵 프로토콜 |
+
+## 동작 확인
+
+<!-- TODO: 보드 사진 또는 GTKWave 파형 캡처를 docs/img/ 에 넣고 아래 경로를 맞춰주세요 -->
+<!-- ![FPGA 동작 사진](docs/img/board.jpg) -->
+<!-- ![타일링 파형](docs/img/tiling_wave.png) -->
+
 ## 아키텍처
 
 ```
@@ -35,7 +50,7 @@ Top_Module
 - [x] 4×4 시스톨릭 어레이 코어 (weight-stationary), FPGA 실물 검증 완료
 - [x] UART 기반 host-device 레지스터 맵 프로토콜
 - [x] Accumulator: K/N-tile read-modify-write 누적 + N-tile별 주소 확장(`N_TileBase_REG`), `TileStart`/`Pop` 엣지 검출, 순차 팝아웃 — 시뮬레이션 검증 완료
-- [x] SVA 기반 정형 검증 (`FIFO`, `FIFO_All`, `SRAM`, `Controller`, `MAC_Unit`, `Systolic_Array`)
+- [x] SVA 기반 assertion 검증 — Verilator 시뮬레이션 중 동작 규칙 체크 (`FIFO`, `FIFO_All`, `SRAM`, `Controller`, `MAC_Unit`, `Systolic_Array`)
 - [x] `K_LoopMatmul` — K-tile 루프 하드웨어 자동화, 활성값 주소 스트라이드를 `Num_act`(M) 기반으로 일반화(M이 4보다 작거나 커도 동작) — RTL + 시뮬레이션 검증 완료
 - [x] `N_LoopMatmul` — N-tile 루프 하드웨어 자동화(`K_LoopMatmul`을 감싸는 중첩 구조) + Accumulator N-tile 주소 확장 — RTL + 시뮬레이션 검증 완료, golden model 대비 전부 일치
 - [ ] K/N이 ARRAY_SIZE(4)의 배수가 아닌 경우(나머지 처리/제로 패딩)
@@ -51,7 +66,7 @@ Top_Module
 | `sva/` | SystemVerilog Assertion + bind 파일 |
 | `docs/` | 설계 스펙, 스터디 노트 (`K_Tiling_Design_Spec.md` 등) |
 | `host/` | 호스트 측 파이썬 스크립트 (UART 통신, 알고리즘 검증용) |
-| `fpga_bringup/` | Tang Nano 9K 제약 파일, 비트스트림, 브링업용 스크립트 |
+| `fpga_bringup/` | Tang Nano 9K 제약 파일, 브링업용 스크립트 (비트스트림은 빌드 산출물이라 저장소에 포함하지 않음) |
 | `CONVENTIONS.md` | RTL 네이밍/코딩 컨벤션 규칙 |
 
 ## 빌드 & 테스트
@@ -63,7 +78,7 @@ make test              # 전체 시스템 테스트벤치 (Icarus)
 make test_accumulator  # Accumulator 단독 테스트벤치 (Icarus)
 make test_loopmatmul   # K_LoopMatmul 하드웨어 K-타일 루프 테스트벤치, K=4/8/12 (Icarus)
 make test_n_loopmatmul # N_LoopMatmul 하드웨어 N/K-타일 중첩 루프 테스트벤치, M<4/=4/>4 포함 (Icarus)
-make test_sva          # Verilator + SVA 정형 검증
+make test_sva          # Verilator + SVA assertion 검증
 make wave               # 파형(GTKWave) 확인
 ```
 
